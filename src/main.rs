@@ -3,8 +3,6 @@ use {
   std::{env, ffi::CString, fmt::Display, io::{self,Write}, path::{Path, PathBuf}, ptr::null, str, process::Command}
 };
 
-
-
 fn spawn_proc(args: Vec<&str>) {
   let p_id = unsafe { libc::fork() }; // fork the current proc
 
@@ -14,8 +12,9 @@ fn spawn_proc(args: Vec<&str>) {
     //unsafe{println!("### Child ###\nCurrent PID: {} and Child PID: {}\n", libc::getpid(), p_id)};
     //let args = args.into_iter().map(|x| CString::new(x).unwrap().as_ptr()).collect::<Vec<*const libc::c_char>>();
     
-    
-    
+    unsafe {
+      libc::signal(libc::SIGINT, libc::SIG_DFL);
+    }
 
     let mut argsv: Vec<CString> = vec![];//args.clone().into_iter().map(|x| {let a = CString::new(x).unwrap(); a.as_ptr()}).collect::<Vec<*const libc::c_char>>();
     for i in &args {
@@ -47,10 +46,21 @@ fn tokenize(input: &String) -> Vec<&str> {
 }
 
 
-struct ShellDisplay {
-  dir: PathBuf,
+trait ShellBuiltIns {
+  fn cd(&mut self, path: String) -> i32;
 }
-impl Display for ShellDisplay {
+
+struct Shell {
+  path: PathBuf,
+}
+impl ShellBuiltIns for Shell {
+  fn cd(&mut self, path: String) -> i32 {
+    let path = CString::new(path).unwrap();
+    unsafe {libc::chdir(path.as_ptr()) }
+  }
+}
+
+impl Display for Shell {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let hostname = match &env::var("HOSTNAME") {
       Ok(s) => s.clone(),
@@ -60,28 +70,38 @@ impl Display for ShellDisplay {
       Ok(s) => s.clone(),
       Err(_) => String::from("???"),
     };
-    let dir = match &env::var("PWD") {
-      Ok(s) => s.replace(&env::var("HOME").unwrap(), "~"),
-      Err(_) => String::from("???"),
-    };
-
+    let dir = str::from_utf8(&Command::new("pwd").output().unwrap().stdout).unwrap().trim().replace(&env::var("HOME").unwrap(), "~");
     write!(f, "[{user}@{hostname}:{dir}]$ ")
   }
 }
 
-
 fn main() {
   env::set_var("HOSTNAME", str::from_utf8(&Command::new("hostname").output().unwrap().stdout).unwrap().trim()); // this is cheating I think
-  let shell = ShellDisplay {
-    dir: PathBuf::from(&env::var("PWD").unwrap())
+  let mut shell = Shell {
+    path: PathBuf::from(&env::var("PWD").unwrap())
   };
   
 
+  unsafe {
+    libc::signal(libc::SIGINT, libc::SIG_IGN);
+    /*libc::signal(libc::SIG_*/
+  }
+
+  let NULL: *const i8 = null();
   loop {
     print!("{}", shell);
     let _ = io::stdout().flush();
     let mut input = String::new();
     let _ = io::stdin().read_line(&mut input).unwrap();
-    spawn_proc(tokenize(&input));
+
+    if input.is_empty() {
+      break
+    }
+
+    let tokens = tokenize(&input);
+    match tokens[0] {
+      "cd" => {println!("{:#?}", shell.cd(tokens[1].to_string()))},
+      _ => spawn_proc(tokens),
+    }
   }
 }

@@ -8,6 +8,11 @@ in
     version = mf.version;
     src = pkgs.lib.cleanSource ./.;
 
+    buildInputs = with pkgs; [
+      libclang
+    ];
+    PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
+    LIBCLANG_PATH = "${pkgs.llvmPackages_12.libclang.lib}/lib";
     cargoLock.lockFile = ./Cargo.lock;
     
     #cargoSha256 = nixpkgs.lib.fakeSha256;
