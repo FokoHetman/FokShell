@@ -1,6 +1,6 @@
 use {
   libc::{self, execvp}, 
-  std::{env, ffi::CString, fmt::Display, io::{self,Write}, path::{Path, PathBuf}, ptr::null, str, process::Command}
+  std::{env, ffi::CString, fmt::Display, io::{self, Read, Write}, path::{Path, PathBuf}, process::Command, ptr::null, str, sync::Mutex}
 };
 
 fn spawn_proc(args: Vec<&str>) {
@@ -40,20 +40,294 @@ fn spawn_proc(args: Vec<&str>) {
   }
 }
 
-
-fn tokenize(input: &String) -> Vec<&str> {
-  return input[..input.len()-1].split(" ").collect::<Vec<&str>>();
+enum Fructa {
+  Exit,
+  Pass,
 }
-
 
 trait ShellBuiltIns {
   fn cd(&mut self, path: String) -> i32;
+  fn run(&mut self) -> Fructa;
+  fn clear(&self);
+  fn clear_line(&self);
+  fn redraw(&self);
+  fn ctrl_c(&mut self);
+
+  fn tokenize(&self, input: String) -> Vec<Token>;
+  fn parse(&self, tokens: Vec<Token>) -> Vec<Node>;
+
+  fn parse_redirect(&self, tokens: &mut Vec<Token>) -> Node;
+  fn parse_pipe(&self, tokens: &mut Vec<Token>) -> Node;
+  // add !(), {} somewhere
+  fn parse_primary(&self, tokens: &mut Vec<Token>) -> Node;
+
+  fn eat(&self, tokens: &mut Vec<Token>) -> Token;
+
+
+  fn is_alpha(&self, chr: char) -> bool;
+
+  fn evaluate(&self, node: Node, child: bool) -> SHFructa;
+  fn evaluate_program(&self, nodes: Vec<Node>);
+  fn evaluate_file(&self, node: Node, child: bool) -> SHFructa;
+  fn evaluate_string(&self, node: Node, child: bool) -> SHFructa;
 }
 
-struct Shell {
-  path: PathBuf,
+#[derive(Debug,Clone,PartialEq)]
+enum Token {
+  File(String),           // cd, who, ./file.sh
+  String(String),         // "hello" 'what'       // might impl a char
+  Pipe,                   // |
+  Redirection,            // >
+  AppendableRedirection,  // >>
+  Null,                   // ?
+  Enter,                  // \n
+
+  Semicolon,              // ;
+  And,                    // &&
 }
+
+#[derive(Debug,PartialEq)]
+enum Node {
+  And(Box<Node>, Box<Node>),
+  Pipe(Box<Node>, Box<Node>),
+  Redirect(Box<Node>, Box<Node>),
+  RedirectAppend(Box<Node>, Box<Node>),
+  File(String, Vec<Box<Node>>),
+  String(String),
+  Enter,
+  Nullus
+}
+
+enum SHFructa {
+  String(String),
+  File(String, Vec<Box<SHFructa>>),
+}
+
+
+#[derive(Clone)]
+struct Shell {
+  input: String,
+  state: State,
+  cursor: u16,
+}
+#[derive(Clone)]
+enum State {
+  Normal,
+  RSearch,
+}
+
 impl ShellBuiltIns for Shell {
+  fn is_alpha(&self, chr: char) -> bool {
+    chr.is_alphanumeric() || ['.'].contains(&chr)
+  }
+  fn tokenize(&self, input: String) -> Vec<Token> {
+    let mut result = vec![];
+    let mut input = input.chars().collect::<Vec<char>>();
+    let mut delete;
+    while input.len() > 0 {
+      delete = true;
+      result.push(match input[0] {
+        '"' => {
+          input.remove(0);
+          let mut buffer = String::new();
+          while input.len() > 0 && input[0]!='"' {
+            buffer += &input[0].to_string();
+            input.remove(0);
+          }
+          if input.len() == 0 {
+            todo!()
+          }
+          Token::String(buffer)
+        },
+        '|' => Token::Pipe,
+        ';' => Token::Semicolon,
+        '&' => {
+          match input[1] {
+            '&' => {input.remove(0); Token::And},
+            _ => Token::Null,
+          }
+        }
+        '>' => {
+          match input[1] {
+            '>' => {input.remove(0); Token::AppendableRedirection},
+            _ => Token::Redirection,
+          }
+        },
+        '\n' => Token::Enter,
+        _ => {
+          if self.is_alpha(input[0]) {
+            delete = false;
+            let mut buffer = String::new();
+            while input.len()>0 && self.is_alpha(input[0]) {
+              buffer += &input[0].to_string();
+              input.remove(0);
+            }
+            Token::File(buffer)
+          } else {
+            Token::Null
+          }
+        },
+      });
+      if delete {
+        input.remove(0);
+      }
+    }
+    result.iter().filter(|x| x!=&&Token::Null).collect::<Vec<&Token>>().iter().map(|x| x.clone().to_owned()).collect::<Vec<Token>>()
+  }
+
+  fn eat(&self, tokens: &mut Vec<Token>) -> Token {
+    tokens.remove(0)
+  }
+
+  fn parse(&self, tokens: Vec<Token>) -> Vec<Node> {
+    let mut nodes: Vec<Node> = vec![];
+    let mut tokens = tokens;
+
+    while tokens.len() > 0  {
+      nodes.push(self.parse_redirect(&mut tokens));
+    }
+    nodes
+  }
+  fn parse_redirect(&self, tokens: &mut Vec<Token>) -> Node {
+    let mut left = self.parse_pipe(tokens);
+
+    if tokens.len() > 0 {
+      match tokens[0] {
+        Token::Redirection => {
+          self.eat(tokens);
+          left = Node::Redirect(
+            Box::new(left), 
+            Box::new(self.parse_pipe(tokens))
+          )
+        },
+        Token::AppendableRedirection => {
+          self.eat(tokens);
+          left = Node::RedirectAppend(
+            Box::new(left), 
+            Box::new(self.parse_pipe(tokens))
+          )
+        },
+        _ => {}
+      }
+    }
+    left
+  }
+  fn parse_pipe(&self, tokens: &mut Vec<Token>) -> Node {
+    let mut left = self.parse_primary(tokens);
+
+    if tokens.len() > 0 {
+      match tokens[0] {
+        Token::Pipe => {
+          self.eat(tokens);
+          left = Node::Pipe(
+            Box::new(left), 
+            Box::new(self.parse_primary(tokens))
+          )
+        }
+        _ => {}
+      }
+    }
+    left
+  }
+
+  fn parse_primary(&self, tokens: &mut Vec<Token>) -> Node {
+    let eat = self.eat(tokens);
+    match eat {
+      Token::File(i) => {
+        let mut children: Vec<Box<Node>> = vec![];
+        while tokens.len()>0 && match tokens[0] {Token::String(_) | Token::File(_) => true, _ => false} {
+          children.push(Box::new(self.parse_primary(tokens)));
+        }
+        Node::File(i, children)
+      },
+      Token::String(i) => Node::String(i),
+      Token::Enter => Node::Enter,
+      _ => Node::Nullus
+    }
+  }
+
+  fn evaluate_program(&self, nodes: Vec<Node>) {
+    for node in nodes {
+      self.evaluate(node, false);
+    }
+  }
+  fn evaluate(&self, node: Node, child: bool) -> SHFructa {
+    match node {
+      Node::File(_, _) => self.evaluate_file(node, child),
+      Node::String(_) => self.evaluate_string(node, child),
+      _ => todo!()
+    }
+  }
+  fn evaluate_file(&self, node: Node, child: bool) -> SHFructa {
+    match node {
+      Node::File(i, children) => {
+        let mut args: Vec<Box<SHFructa>> = vec![];
+        for i in children {
+          args.push(Box::new(self.evaluate(*i, true)))
+        }
+        SHFructa::File(i, args)
+      }
+      _ => todo!()
+    }
+  }
+  
+
+
+  fn ctrl_c(&mut self) {
+    println!("^C");
+    self.input = String::new();
+    self.cursor = 0;
+    self.redraw();
+  }
+  fn clear(&self) {
+    println!("\x1b[2J\x1b[H");
+    io::stdout().flush().unwrap();
+  }
+  fn clear_line(&self) {
+    print!("\x1b[2K");
+    io::stdout().flush().unwrap();
+  }
+  fn redraw(&self) {
+    self.clear_line();
+    let mut combined_string = String::new();
+    combined_string += &format!("\x1b[1E\x1b[1F");
+    match self.state {
+      State::Normal => {
+        combined_string += &format!("{}", self);
+      },
+      State::RSearch => {
+        combined_string += &format!("(rsearch)`':")
+      },
+    }
+    combined_string += " ";
+    combined_string += &self.input;
+
+    if self.input.len()>0 { combined_string += &format!("\x1b[{}D", self.input.len()); };
+    if self.cursor>0 { combined_string += &format!("\x1b[{}C", self.cursor); }
+
+
+    print!("{}", combined_string);
+    io::stdout().flush().unwrap();
+  }
+  fn run(&mut self) -> Fructa {
+    if self.input.is_empty() {
+      return Fructa::Exit;
+    }
+
+    let tokens = self.tokenize(self.input.clone());
+    println!("TOKENS: {:#?}", tokens);
+    let nodes = self.parse(tokens);
+    println!("NODES: {:#?}", nodes);
+    /*match tokens[0] {
+      "cd" => {println!("{:#?}", self.cd(tokens[1].to_string()))},
+      "exit" => {return Fructa::Exit;},
+      "clear"  => {self.clear();},
+      _ => spawn_proc(tokens),
+    }*/
+    self.input = String::new();
+    self.cursor = 0;
+    Fructa::Pass
+  }
   fn cd(&mut self, path: String) -> i32 {
     let path = CString::new(path).unwrap();
     unsafe {libc::chdir(path.as_ptr()) }
@@ -71,37 +345,254 @@ impl Display for Shell {
       Err(_) => String::from("???"),
     };
     let dir = str::from_utf8(&Command::new("pwd").output().unwrap().stdout).unwrap().trim().replace(&env::var("HOME").unwrap(), "~");
-    write!(f, "[{user}@{hostname}:{dir}]$ ")
+    write!(f, "[{user}@{hostname}:{dir}]$")
   }
 }
 
+
+
+
+
+static termios: Mutex<libc::termios> = Mutex::new(libc::termios { c_iflag: 0, c_oflag: 0, c_cflag: 0, c_lflag: 0, c_line: 1, c_cc: [0 as u8; 32], c_ispeed: 1, c_ospeed: 1 });
+
+
+
+fn setup_termios() {
+  termios.lock().unwrap().c_cflag &= !libc::CSIZE;
+  termios.lock().unwrap().c_cflag |= libc::CS8;
+  termios.lock().unwrap().c_cc[libc::VMIN] = 1;
+}
+
+extern "C" fn disable_raw_mode() {
+  unsafe {
+    libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &(*termios.lock().unwrap()));
+  }
+}
+fn enable_raw_mode() {
+  unsafe {
+    libc::tcgetattr(libc::STDIN_FILENO, &mut *termios.lock().unwrap());
+    libc::atexit(disable_raw_mode);
+    let mut raw = *termios.lock().unwrap();
+    raw.c_lflag &= !(libc::ECHO | libc::ICANON);
+    libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &raw);
+  }
+}
+
+
+#[derive(Debug)]
+pub struct KeyEvent {
+  pub code: KeyCode,
+  pub modifiers: Vec<Modifier>,
+}
+#[derive(Debug,PartialEq)]
+pub enum Modifier {
+  Control,
+  Shift,
+  //why even do it at this point
+}
+#[derive(Debug,PartialEq)]
+pub enum Direction {
+  Up,
+  Down,
+  Right,
+  Left
+}
+
+#[derive(Debug,PartialEq)]
+pub enum KeyCode {
+  Escape,
+  Enter,
+  Backspace,
+  Delete,
+  Arrow(Direction),
+  Char(char),
+}
+
+const ESCAPE: char = 27 as char;
+const BACKSPACE: char = '\u{7f}';
+const TAB: char = '\t';
+const ENTER: char = '\n';
+
+fn getch() -> char {
+  io::stdin().bytes().next().unwrap().unwrap() as char
+}
+
+fn get_arrow() -> KeyCode {
+  match getch() {'A' => KeyCode::Arrow(Direction::Up), 'B' => KeyCode::Arrow(Direction::Down), 'C' => KeyCode::Arrow(Direction::Right), 'D' => KeyCode::Arrow(Direction::Left),
+                                                           _ => KeyCode::Escape }
+}
+
+
+struct SigHandler {shell: Shell}
+
+impl SigHandler {}
+static SIGHANDLER: Mutex<SigHandler> = Mutex::new(SigHandler {shell: Shell {input: String::new(), state: State::Normal, cursor: 0}});
+
+
+
+
+extern fn sigint_handler(signo: libc::c_int) {
+  let mut lock = SIGHANDLER.lock().unwrap();
+  lock.shell.ctrl_c();
+  drop(lock);
+}
+
+fn get_sighandler() -> libc::sighandler_t {
+    sigint_handler as extern fn(libc::c_int) as *mut libc::c_void as libc::sighandler_t
+}
+
+
 fn main() {
+  setup_termios();
+  enable_raw_mode();
+
+  SIGHANDLER.lock().unwrap().shell = Shell {input: String::new(), state: State::Normal, cursor: 0};
+  
+
+
   env::set_var("HOSTNAME", str::from_utf8(&Command::new("hostname").output().unwrap().stdout).unwrap().trim()); // this is cheating I think
-  let mut shell = Shell {
-    path: PathBuf::from(&env::var("PWD").unwrap())
-  };
   
 
   unsafe {
-    libc::signal(libc::SIGINT, libc::SIG_IGN);
-    /*libc::signal(libc::SIG_*/
+    libc::signal(libc::SIGINT, get_sighandler());
   }
 
   let NULL: *const i8 = null();
-  loop {
-    print!("{}", shell);
-    let _ = io::stdout().flush();
-    let mut input = String::new();
-    let _ = io::stdin().read_line(&mut input).unwrap();
+  let lock = SIGHANDLER.lock().unwrap();
+  lock.shell.redraw();
+  drop(lock);
+  for c in io::stdin().bytes() {
+    let c: char = c.unwrap() as char;
+        
+    let mut modifiers: Vec<Modifier> = vec![];
+    if c.is_control() && ![ENTER, TAB, ESCAPE, BACKSPACE].contains(&c) {
+      modifiers.push(Modifier::Control);
+    }
+    
+    let event = KeyEvent{
+      code: match c {BACKSPACE => KeyCode::Backspace, '\n' => KeyCode::Enter,
+          
+          'Ã' => {
+            match getch() {
+              '³' => KeyCode::Char('ó'),
+              '\u{93}' => KeyCode::Char('Ó'),
+              _ => KeyCode::Escape
+            }
+          },
+          'Ä' => {
+            match getch() {
+              '\u{99}' => KeyCode::Char('ę'),
+              '\u{98}' => KeyCode::Char('Ę'),
+              '\u{87}' => KeyCode::Char('ć'),
+              '\u{86}' => KeyCode::Char('Ć'),
+              '\u{85}' => KeyCode::Char('ą'),
+              '\u{84}' => KeyCode::Char('Ą'),
+              _ => KeyCode::Escape
+            }
+          },
+          'Å' => {
+            match getch() {
+              '\u{84}' => KeyCode::Char('ń'),
+              '\u{83}' => KeyCode::Char('Ń'),
+              '\u{82}' => KeyCode::Char('ł'),
+              '\u{81}' => KeyCode::Char('Ł'),
+              '\u{9b}' => KeyCode::Char('ś'),
+              '\u{9a}' => KeyCode::Char('Ś'),
+              'º' => KeyCode::Char('ź'),
+              '¹' => KeyCode::Char('Ź'),
+              '¼' => KeyCode::Char('ż'),
+              '»' => KeyCode::Char('Ż'),
+              _ => KeyCode::Escape
+            }
+          },
+          '\u{1b}' => {
+              match getch() {
+                    '[' => {
+                        match getch() {
+                            'A' => KeyCode::Arrow(Direction::Up), 'B' => KeyCode::Arrow(Direction::Down), 'C' => KeyCode::Arrow(Direction::Right), 'D' => KeyCode::Arrow(Direction::Left),
+                            '1' => match getch() {
+                                ';' => match getch() 
+                                { '5' => {modifiers.push(Modifier::Control); get_arrow()}, '2' => {modifiers.push(Modifier::Shift); get_arrow()}, _ => KeyCode::Escape}, _ => KeyCode::Escape
+                            },
+                            '3' => match getch() {
+                              '~' => KeyCode::Delete,
+                              _ => KeyCode::Escape,
+                            }
+                            _ => KeyCode::Escape,
+                        }
+                    },
+                   _ => KeyCode::Escape}},
+          _ => KeyCode::Char(c)},
+      modifiers,
+    };
 
-    if input.is_empty() {
-      break
+    let mut lock = SIGHANDLER.lock().unwrap();
+    
+    match event.code {
+      KeyCode::Enter => {
+        lock.shell.input += "\n";
+        println!();
+        match lock.shell.run() {
+          Fructa::Exit => break,
+          _ => {lock.shell.redraw(); continue},
+        };
+      },
+      KeyCode::Escape => {
+        lock.shell.state = match lock.shell.state {
+          State::RSearch => State::Normal,
+          State::Normal => State::Normal,
+        }
+      },
+      KeyCode::Char(c) => {
+        match lock.shell.state {
+          State::Normal => {
+            if event.modifiers.contains(&Modifier::Control) {
+              match c {
+                '\u{12}' => {lock.shell.state = State::RSearch;lock.shell.redraw();},
+                '\u{c}' => {lock.shell.clear();lock.shell.redraw();},
+                '\u{4}' => {if lock.shell.input.is_empty() {break}},
+                _ => {},
+              }
+            } else {
+              lock.shell.cursor += 1;
+              print!("{}", c);
+              io::stdout().flush().unwrap();
+              
+              lock.shell.input += &c.to_string();
+            }
+          },
+          State::RSearch => {
+            if !event.modifiers.contains(&Modifier::Control) {
+              print!("{}", c);
+              io::stdout().flush().unwrap();
+              lock.shell.input += &c.to_string();
+            }
+          },
+        }
+      },
+      KeyCode::Backspace => {
+        if lock.shell.cursor > 0 {
+          let mut left = lock.shell.input[..(lock.shell.cursor-1) as usize].to_string();
+          left += &lock.shell.input[lock.shell.cursor as usize..].to_string();
+          lock.shell.input = left;
+          lock.shell.cursor -= 1;
+
+          //io::stdout().flush().unwrap();
+          lock.shell.redraw();
+        }
+      },
+      KeyCode::Arrow(d) => {
+        match d {
+          Direction::Up => todo!(),
+          Direction::Down => todo!(),
+          Direction::Left => {if lock.shell.cursor>0 {lock.shell.cursor-=1; print!("\x1b[1D"); io::stdout().flush().unwrap();}},
+          Direction::Right => {if lock.shell.cursor <(lock.shell.input.len() as u16) {lock.shell.cursor+=1; print!("\x1b[1C"); io::stdout().flush().unwrap();}},
+        }
+      },
+      _ => {}
     }
 
-    let tokens = tokenize(&input);
-    match tokens[0] {
-      "cd" => {println!("{:#?}", shell.cd(tokens[1].to_string()))},
-      _ => spawn_proc(tokens),
-    }
+    /*ENTER
+    */
   }
 }
