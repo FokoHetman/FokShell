@@ -56,10 +56,10 @@ trait ShellBuiltIns {
   fn tokenize(&self, input: String) -> Vec<Token>;
   fn parse(&self, tokens: Vec<Token>) -> Vec<Node>;
 
-  fn parse_redirect(&self, tokens: &mut Vec<Token>) -> Node;
-  fn parse_pipe(&self, tokens: &mut Vec<Token>) -> Node;
+  fn parse_redirect(&self, tokens: &mut Vec<Token>, deep: bool) -> Node;
+  fn parse_pipe(&self, tokens: &mut Vec<Token>, deep: bool) -> Node;
   // add !(), {} somewhere
-  fn parse_primary(&self, tokens: &mut Vec<Token>) -> Node;
+  fn parse_primary(&self, tokens: &mut Vec<Token>, deep: bool) -> Node;
 
   fn eat(&self, tokens: &mut Vec<Token>) -> Token;
 
@@ -68,7 +68,6 @@ trait ShellBuiltIns {
 
   fn evaluate(&self, node: Node, child: bool) -> SHFructa;
   fn evaluate_program(&self, nodes: Vec<Node>);
-  fn evaluate_file(&self, node: Node, child: bool) -> SHFructa;
   fn evaluate_string(&self, node: Node, child: bool) -> SHFructa;
 }
 
@@ -92,8 +91,7 @@ enum Node {
   Pipe(Box<Node>, Box<Node>),
   Redirect(Box<Node>, Box<Node>),
   RedirectAppend(Box<Node>, Box<Node>),
-  File(String, Vec<Box<Node>>),
-  String(String),
+  String(String, Vec<Box<Node>>),
   Enter,
   Nullus
 }
@@ -184,12 +182,12 @@ impl ShellBuiltIns for Shell {
     let mut tokens = tokens;
 
     while tokens.len() > 0  {
-      nodes.push(self.parse_redirect(&mut tokens));
+      nodes.push(self.parse_redirect(&mut tokens, true));
     }
     nodes
   }
-  fn parse_redirect(&self, tokens: &mut Vec<Token>) -> Node {
-    let mut left = self.parse_pipe(tokens);
+  fn parse_redirect(&self, tokens: &mut Vec<Token>, deep: bool) -> Node {
+    let mut left = self.parse_pipe(tokens, deep);
 
     if tokens.len() > 0 {
       match tokens[0] {
@@ -197,14 +195,14 @@ impl ShellBuiltIns for Shell {
           self.eat(tokens);
           left = Node::Redirect(
             Box::new(left), 
-            Box::new(self.parse_pipe(tokens))
+            Box::new(self.parse_pipe(tokens, deep))
           )
         },
         Token::AppendableRedirection => {
           self.eat(tokens);
           left = Node::RedirectAppend(
             Box::new(left), 
-            Box::new(self.parse_pipe(tokens))
+            Box::new(self.parse_pipe(tokens, deep))
           )
         },
         _ => {}
@@ -212,8 +210,8 @@ impl ShellBuiltIns for Shell {
     }
     left
   }
-  fn parse_pipe(&self, tokens: &mut Vec<Token>) -> Node {
-    let mut left = self.parse_primary(tokens);
+  fn parse_pipe(&self, tokens: &mut Vec<Token>, deep: bool) -> Node {
+    let mut left = self.parse_primary(tokens, deep);
 
     if tokens.len() > 0 {
       match tokens[0] {
@@ -221,7 +219,7 @@ impl ShellBuiltIns for Shell {
           self.eat(tokens);
           left = Node::Pipe(
             Box::new(left), 
-            Box::new(self.parse_primary(tokens))
+            Box::new(self.parse_primary(tokens, deep))
           )
         }
         _ => {}
@@ -230,17 +228,27 @@ impl ShellBuiltIns for Shell {
     left
   }
 
-  fn parse_primary(&self, tokens: &mut Vec<Token>) -> Node {
+  fn parse_primary(&self, tokens: &mut Vec<Token>, deep: bool) -> Node {
     let eat = self.eat(tokens);
     match eat {
       Token::File(i) => {
         let mut children: Vec<Box<Node>> = vec![];
-        while tokens.len()>0 && match tokens[0] {Token::String(_) | Token::File(_) => true, _ => false} {
-          children.push(Box::new(self.parse_primary(tokens)));
+        if deep {
+          while tokens.len()>0 && match tokens[0] {Token::String(_) | Token::File(_) => true, _ => false} {
+            children.push(Box::new(self.parse_primary(tokens, false)));
+          }
         }
-        Node::File(i, children)
+        Node::String(i, children)
       },
-      Token::String(i) => Node::String(i),
+      Token::String(i) => {
+        let mut children: Vec<Box<Node>> = vec![];
+        if deep {
+          while tokens.len()>0 && match tokens[0] {Token::String(_) | Token::File(_) => true, _ => false} {
+            children.push(Box::new(self.parse_primary(tokens, false)));
+          }
+        }
+        Node::String(i, children)
+      },
       Token::Enter => Node::Enter,
       _ => Node::Nullus
     }
@@ -253,14 +261,13 @@ impl ShellBuiltIns for Shell {
   }
   fn evaluate(&self, node: Node, child: bool) -> SHFructa {
     match node {
-      Node::File(_, _) => self.evaluate_file(node, child),
-      Node::String(_) => self.evaluate_string(node, child),
+      Node::String(..) => self.evaluate_string(node, child),
       _ => todo!()
     }
   }
-  fn evaluate_file(&self, node: Node, child: bool) -> SHFructa {
+  fn evaluate_string(&self, node: Node, child: bool) -> SHFructa {
     match node {
-      Node::File(i, children) => {
+      Node::String(i, children) => {
         let mut args: Vec<Box<SHFructa>> = vec![];
         for i in children {
           args.push(Box::new(self.evaluate(*i, true)))
