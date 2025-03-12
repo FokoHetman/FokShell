@@ -56,6 +56,7 @@ trait ShellBuiltIns {
   fn tokenize(&self, input: String) -> Vec<Token>;
   fn parse(&self, tokens: Vec<Token>) -> Vec<Node>;
 
+  fn parse_and(&self, tokens: &mut Vec<Token>, deep: bool) -> Node;
   fn parse_redirect(&self, tokens: &mut Vec<Token>, deep: bool) -> Node;
   fn parse_pipe(&self, tokens: &mut Vec<Token>, deep: bool) -> Node;
   // add !(), {} somewhere
@@ -66,9 +67,10 @@ trait ShellBuiltIns {
 
   fn is_alpha(&self, chr: char) -> bool;
 
-  fn evaluate(&self, node: Node, child: bool) -> SHFructa;
+  fn evaluate(&self, node: Node, direct_eval: bool) -> SHFructa;
   fn evaluate_program(&self, nodes: Vec<Node>);
-  fn evaluate_string(&self, node: Node, child: bool) -> SHFructa;
+  fn evaluate_string(&self, node: Node, direct_eval: bool) -> SHFructa;
+  fn evaluate_pipe(&self, node: Node, direct_eval: bool) -> SHFructa;
 }
 
 #[derive(Debug,Clone,PartialEq)]
@@ -182,10 +184,28 @@ impl ShellBuiltIns for Shell {
     let mut tokens = tokens;
 
     while tokens.len() > 0  {
-      nodes.push(self.parse_redirect(&mut tokens, true));
+      nodes.push(self.parse_and(&mut tokens, true));
     }
     nodes
   }
+  fn parse_and(&self, tokens: &mut Vec<Token>, deep: bool) -> Node {
+    let mut left = self.parse_redirect(tokens, deep);
+
+    if tokens.len() > 0 {
+      match tokens[0] {
+        Token::And => {
+          self.eat(tokens);
+          left = Node::And(
+            Box::new(left), 
+            Box::new(self.parse_redirect(tokens, deep))
+          )
+        }
+        _ => {}
+      }
+    }
+    left
+  }
+
   fn parse_redirect(&self, tokens: &mut Vec<Token>, deep: bool) -> Node {
     let mut left = self.parse_pipe(tokens, deep);
 
@@ -259,20 +279,20 @@ impl ShellBuiltIns for Shell {
       self.evaluate(node, false);
     }
   }
-  fn evaluate(&self, node: Node, child: bool) -> SHFructa {
+  fn evaluate(&self, node: Node, direct_eval: bool) -> SHFructa {
     match node {
-      Node::String(..) => self.evaluate_string(node, child),
+      Node::String(..) => self.evaluate_string(node, direct_eval),
+      Node::Redirect(..) => self.evaluate_pipe(node, direct_eval),
       _ => todo!()
     }
   }
-  fn evaluate_string(&self, node: Node, child: bool) -> SHFructa {
+  fn evaluate_pipe(&self, node: Node, direct_eval: bool) -> SHFructa {
+    todo!()
+  }
+  fn evaluate_string(&self, node: Node, direct_eval: bool) -> SHFructa {
     match node {
       Node::String(i, children) => {
-        let mut args: Vec<Box<SHFructa>> = vec![];
-        for i in children {
-          args.push(Box::new(self.evaluate(*i, true)))
-        }
-        SHFructa::File(i, args)
+        todo!()
       }
       _ => todo!()
     }
@@ -325,6 +345,7 @@ impl ShellBuiltIns for Shell {
     println!("TOKENS: {:#?}", tokens);
     let nodes = self.parse(tokens);
     println!("NODES: {:#?}", nodes);
+    self.evaluate_program(nodes);
     /*match tokens[0] {
       "cd" => {println!("{:#?}", self.cd(tokens[1].to_string()))},
       "exit" => {return Fructa::Exit;},
