@@ -1,7 +1,11 @@
 use {
   libc::{self, execvp}, 
-  std::{env, ffi::CString, fmt::Display, io::{self, Read, Write}, path::{Path, PathBuf}, process::Command, ptr::null, str, sync::Mutex}
+  std::{env, ffi::CString, fmt::Display, fs, io::{self, Read, Write}, path::{Path, PathBuf}, process::Command, ptr::null, str, sync::Mutex}
 };
+
+fn spawn_proc_output(args: Vec<&str>) -> String {
+  str::from_utf8(&Command::new(args[0]).args(args[1..].iter()).output().unwrap().stdout).unwrap().to_string()
+}
 
 fn spawn_proc(args: Vec<&str>) {
   let p_id = unsafe { libc::fork() }; // fork the current proc
@@ -67,10 +71,10 @@ trait ShellBuiltIns {
 
   fn is_alpha(&self, chr: char) -> bool;
 
-  fn evaluate(&self, node: Node, direct_eval: bool) -> SHFructa;
-  fn evaluate_program(&self, nodes: Vec<Node>);
-  fn evaluate_string(&self, node: Node, direct_eval: bool) -> SHFructa;
-  fn evaluate_pipe(&self, node: Node, direct_eval: bool) -> SHFructa;
+  fn evaluate(&mut self, node: Node, eval: EvalType) -> SHFructa;
+  fn evaluate_program(&mut self, nodes: Vec<Node>) -> SHFructa;
+  fn evaluate_string(&mut self, node: Node, eval: EvalType) -> SHFructa;
+  fn evaluate_redirect(&mut self, node: Node, eval: EvalType) -> SHFructa;
 }
 
 #[derive(Debug,Clone,PartialEq)]
@@ -99,9 +103,20 @@ enum Node {
 }
 
 enum SHFructa {
-  String(String),
-  File(String, Vec<Box<SHFructa>>),
+  POPEN(String),
+  ProcExit,
+  SigExit,
+
+  Raw(String),
 }
+
+#[derive(Debug,Clone)]
+enum EvalType {
+  Raw,
+  Direct,
+  Redirected,
+}
+
 
 
 #[derive(Clone)]
@@ -116,9 +131,10 @@ enum State {
   RSearch,
 }
 
+
 impl ShellBuiltIns for Shell {
   fn is_alpha(&self, chr: char) -> bool {
-    chr.is_alphanumeric() || ['.'].contains(&chr)
+    chr.is_alphanumeric() || ['.', '/'].contains(&chr)
   }
   fn tokenize(&self, input: String) -> Vec<Token> {
     let mut result = vec![];
@@ -274,26 +290,86 @@ impl ShellBuiltIns for Shell {
     }
   }
 
-  fn evaluate_program(&self, nodes: Vec<Node>) {
+  fn evaluate_program(&mut self, nodes: Vec<Node>) -> SHFructa {
+    let mut last_eval = SHFructa::ProcExit;
     for node in nodes {
-      self.evaluate(node, false);
+      if node != Node::Enter {
+        last_eval = self.evaluate(node, EvalType::Direct);
+      }
     }
+    last_eval
   }
-  fn evaluate(&self, node: Node, direct_eval: bool) -> SHFructa {
+  fn evaluate(&mut self, node: Node, eval: EvalType) -> SHFructa {
     match node {
-      Node::String(..) => self.evaluate_string(node, direct_eval),
-      Node::Redirect(..) => self.evaluate_pipe(node, direct_eval),
+      Node::String(..) => self.evaluate_string(node, eval),
+      Node::Redirect(..) => self.evaluate_redirect(node, eval),
       _ => todo!()
     }
   }
-  fn evaluate_pipe(&self, node: Node, direct_eval: bool) -> SHFructa {
-    todo!()
+  fn evaluate_redirect(&mut self, node: Node, eval: EvalType) -> SHFructa {
+    match node {
+      Node::Redirect(from, to) => {
+        let from = match self.evaluate(*from, EvalType::Redirected) {
+          SHFructa::POPEN(s) => s,
+          _ => panic!()
+        };
+        let to = match self.evaluate(*to, EvalType::Raw) {
+          SHFructa::Raw(s) => s,
+          _ => panic!()
+        };
+        let _ = fs::write(to, from).unwrap();
+        SHFructa::ProcExit
+      }
+      _ => panic!()
+    }
   }
-  fn evaluate_string(&self, node: Node, direct_eval: bool) -> SHFructa {
+  fn evaluate_string(&mut self, node: Node, eval: EvalType) -> SHFructa {
     match node {
       Node::String(i, children) => {
-        todo!()
-      }
+        match eval {
+          EvalType::Direct => {
+            let mut tokens: Vec<String> = vec![];
+            tokens.push(i);
+            for x in children {
+              let val = match *x {
+                Node::String(s, c) => {
+                  if c.len() > 0 {
+                    todo!()
+                  }
+                  s
+                },
+                _ => todo!()
+              }.clone();
+              tokens.push(val);
+            }
+            match (&tokens[0]) as &str {
+              "cd" => {println!("{:#?}", self.cd(tokens[1].to_string()))},
+              "exit" => {return SHFructa::SigExit;},
+              "clear"  => {self.clear();},
+              _ => spawn_proc(tokens.iter().map(|x| x as &str).collect::<Vec<&str>>()),
+            }
+            SHFructa::ProcExit
+          },
+          EvalType::Redirected => {
+            let mut tokens: Vec<String> = vec![];
+            tokens.push(i);
+            for x in children {
+              let val = match self.evaluate_string(*x, EvalType::Raw) {
+                SHFructa::Raw(s) => s,
+                _ => panic!()
+              }.clone();
+              tokens.push(val);
+            }
+            SHFructa::POPEN(spawn_proc_output(tokens.iter().map(|x| x as &str).collect::<Vec<&str>>()))
+          },
+          EvalType::Raw => {
+            if children.len() > 0 {
+              todo!()
+            }
+            SHFructa::Raw(i)
+          },
+        }
+     }
       _ => todo!()
     }
   }
@@ -346,6 +422,7 @@ impl ShellBuiltIns for Shell {
     let nodes = self.parse(tokens);
     println!("NODES: {:#?}", nodes);
     self.evaluate_program(nodes);
+    println!();
     /*match tokens[0] {
       "cd" => {println!("{:#?}", self.cd(tokens[1].to_string()))},
       "exit" => {return Fructa::Exit;},
@@ -473,7 +550,7 @@ fn get_sighandler() -> libc::sighandler_t {
 fn main() {
   setup_termios();
   enable_raw_mode();
-
+  println!();
   SIGHANDLER.lock().unwrap().shell = Shell {input: String::new(), state: State::Normal, cursor: 0};
   
 
