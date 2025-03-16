@@ -418,9 +418,9 @@ impl ShellBuiltIns for Shell {
     }
 
     let tokens = self.tokenize(self.input.clone());
-    println!("TOKENS: {:#?}", tokens);
+    //println!("TOKENS: {:#?}", tokens);
     let nodes = self.parse(tokens);
-    println!("NODES: {:#?}", nodes);
+    //println!("NODES: {:#?}", nodes);
     self.evaluate_program(nodes);
     println!();
     /*match tokens[0] {
