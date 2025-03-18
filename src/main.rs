@@ -1,6 +1,6 @@
 use {
   libc::{self, execvp}, 
-  std::{env, ffi::CString, fmt::Display, fs, io::{self, Read, Write}, path::{Path, PathBuf}, process::Command, ptr::null, str, sync::Mutex}
+  std::{env, ffi::CString, fmt::Display, fs::{self, read_to_string}, io::{self, Read, Write}, path::{Path, PathBuf}, process::Command, ptr::null, str, sync::Mutex}
 };
 
 fn spawn_proc_output(args: Vec<&str>) -> String {
@@ -75,6 +75,8 @@ trait ShellBuiltIns {
   fn evaluate_program(&mut self, nodes: Vec<Node>) -> SHFructa;
   fn evaluate_string(&mut self, node: Node, eval: EvalType) -> SHFructa;
   fn evaluate_redirect(&mut self, node: Node, eval: EvalType) -> SHFructa;
+
+  fn evaluate_and(&mut self, node: Node, eval: EvalType) -> SHFructa;
 }
 
 #[derive(Debug,Clone,PartialEq)]
@@ -303,9 +305,27 @@ impl ShellBuiltIns for Shell {
     match node {
       Node::String(..) => self.evaluate_string(node, eval),
       Node::Redirect(..) => self.evaluate_redirect(node, eval),
+      Node::RedirectAppend(..)  => self.evaluate_redirect(node, eval),
+      Node::And(..) => self.evaluate_and(node, eval),
       _ => todo!()
     }
   }
+
+  fn evaluate_and(&mut self, node: Node, eval: EvalType) -> SHFructa {
+    match node {
+      Node::And(left, right) => {
+        let left_evaluate = self.evaluate(*left, eval.clone());
+
+        match left_evaluate {
+          SHFructa::SigExit => left_evaluate,
+          _ => self.evaluate(*right, eval)
+        }
+
+      },
+      _ => panic!()
+    }
+  }
+
   fn evaluate_redirect(&mut self, node: Node, eval: EvalType) -> SHFructa {
     match node {
       Node::Redirect(from, to) => {
@@ -318,6 +338,22 @@ impl ShellBuiltIns for Shell {
           _ => panic!()
         };
         let _ = fs::write(to, from).unwrap();
+        SHFructa::ProcExit
+      }
+      Node::RedirectAppend(from, to) => {
+        let from = match self.evaluate(*from, EvalType::Redirected) {
+          SHFructa::POPEN(s) => s,
+          _ => panic!()
+        };
+        let to = match self.evaluate(*to, EvalType::Raw) {
+          SHFructa::Raw(s) => s,
+          _ => panic!()
+        };
+        let file_contents = match fs::read_to_string(&to) {
+          Ok(s) => s,
+          Err(_) => String::new(),
+        };
+        let _ = fs::write(to, file_contents + "\n" + &from).unwrap();
         SHFructa::ProcExit
       }
       _ => panic!()
