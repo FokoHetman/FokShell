@@ -4,11 +4,11 @@ mod jobs;
 use {
   shell::{builtins::ShellBuiltIns, language::SHLanguage},
   libc, 
-  std::{env, ffi::CString, fmt::Display, fs::{self, read_to_string}, io::{self, Read, Write}, path::{Path, PathBuf}, process::Command, ptr::null, str, sync::Mutex}
+  std::{time::Duration, thread, env, ffi::CString, fmt::Display, fs::{self, read_to_string}, io::{self, Read, Write}, path::{Path, PathBuf}, process::Command, ptr::null, str, sync::{Arc,Mutex}}
 };
 
 
-
+#[derive(PartialEq)]
 enum Fructa {
   Exit,
   Pass,
@@ -79,10 +79,68 @@ pub struct KeyEvent {
   pub code: KeyCode,
   pub modifiers: Vec<Modifier>,
 }
+impl KeyEvent {
+  fn from(str: &str) -> Self {
+    match str {
+      "\t"       => Self::from_keycode(KeyCode::Tab),
+      "\n"       => Self::from_keycode(KeyCode::Enter),
+      "\u{1b}"   => Self::from_keycode(KeyCode::Escape),
+      "\u{7f}"   => Self::from_keycode(KeyCode::Backspace),
+      "\u{1b}[3~"  => Self::from_keycode(KeyCode::Delete),
+      x if x.starts_with("\u{1b}[") => {
+        let mut modifiers = vec![];
+        let mut rest = &x.chars().collect::<Vec<char>>()[2..];
+        if rest.len() == 4 {
+          if rest[0] == '1' && rest[1] == ';' {
+            modifiers.push(match rest[2] {
+              '2' => Modifier::Shift,
+              '3' => Modifier::Alt,
+              '5' => Modifier::Control,
+              _ => panic!("unknown modifier: {rest:#?}")
+            });
+            rest = &rest[3..];
+          }
+        }
+        let mut code = KeyCode::Arrow(match rest[0] {
+          'A' => Direction::Up,
+          'B' => Direction::Down,
+          'C' => Direction::Right,
+          'D' => Direction::Left,
+          _ => panic!("unknown key: {rest:#?}")
+        });
+        KeyEvent {code, modifiers}
+      },
+      x if x.starts_with("\u{1b}") => KeyEvent {code: KeyCode::Char(x[1..].to_string()), modifiers: vec![Modifier::Alt]},
+      /*"\u{1b}[A" => Self::from_keycode(KeyCode::Arrow(Direction::Up)),
+      "\u{1b}[B" => Self::from_keycode(KeyCode::Arrow(Direction::Down)),
+      "\u{1b}[C" => Self::from_keycode(KeyCode::Arrow(Direction::Right)),
+      "\u{1b}[D" => Self::from_keycode(KeyCode::Arrow(Direction::Left)),
+      */
+      _ => {
+        if str.len()==1 {
+          return match str.chars().collect::<Vec<char>>()[0] {
+            ' ' => Self::from_keycode(KeyCode::Char(" ".to_string())),
+            '\u{1}' ..= '\u{20}' => KeyEvent {
+              code: KeyCode::Char(
+                {let x = str.escape_unicode().to_string(); str::from_utf8(&vec![u8::from_str_radix(&x[3..x.len()-1], 16).unwrap()+96]).unwrap().to_string()}
+              ), 
+              modifiers: vec![Modifier::Control]},
+            _ => Self::from_keycode(KeyCode::Char(str.to_string())),
+          };
+        }
+        Self::from_keycode(KeyCode::Char(str.to_string()))
+      }
+    }
+  }
+  fn from_keycode(code: KeyCode) -> Self {
+    Self {code, modifiers: vec![]}
+  }
+}
 #[derive(Debug,PartialEq)]
 pub enum Modifier {
   Control,
   Shift,
+  Alt,
   //why even do it at this point
 }
 #[derive(Debug,PartialEq)]
@@ -97,10 +155,11 @@ pub enum Direction {
 pub enum KeyCode {
   Escape,
   Enter,
+  Tab,
   Backspace,
   Delete,
   Arrow(Direction),
-  Char(char),
+  Char(String),
 }
 
 const ESCAPE: char = 27 as char;
@@ -126,168 +185,205 @@ static SIGHANDLER: Mutex<SigHandler> = Mutex::new(SigHandler {shell: Shell {inpu
 
 
 
-extern fn sigint_handler(signo: libc::c_int) {
-  let mut lock = SIGHANDLER.lock().unwrap();
-  lock.shell.ctrl_c();
-  drop(lock);
+static mut WRITE_END: Option<i32> = None;
+
+extern "C" fn sigint_handler(_sig: libc::c_int) {
+  unsafe {
+    if let Some(fd) = WRITE_END {
+      let _ = libc::write(fd, b"SIGINT\n".as_ptr() as *const _, 7);
+    }
+  }
 }
+
 
 fn get_sighandler() -> libc::sighandler_t {
     sigint_handler as extern fn(libc::c_int) as *mut libc::c_void as libc::sighandler_t
 }
 
+fn read_key(output: Arc<Mutex<Channel>>) {
+  //println!("startin");
+  for i in io::stdin().bytes() {
+    let mut lock = output.try_lock().unwrap();
+    lock.message.push(i.unwrap());
+    if lock.kill {break}
+    drop(lock);
+  }
+}
 
+#[derive(Debug)]
+struct Channel {
+  kill: bool,
+  message: Vec<u8>,
+}
+
+
+const ms: u32 = 1000000;
+
+
+fn handle_input(chr: &str) -> (Vec<u8>, Fructa) {
+  //println!("{chr:#?}");
+  match chr {
+    "\u{1b}" => {
+      let mut output = Arc::new(Mutex::new(
+        Channel{kill: false, message: vec![]}));
+      let clone = Arc::clone(&output);
+      let a = thread::spawn(|| read_key(clone));
+      thread::sleep(Duration::new(0, 50*ms));
+      //println!("{output:#?}");
+      let mut lock = output.lock().unwrap();
+      let received = lock.message.clone();
+      lock.kill = true;
+      drop(lock);
+      if evaluate_event(KeyEvent::from(&("\u{1b}".to_string() + str::from_utf8(&received).unwrap()))) == Fructa::Exit {
+        return (vec![], Fructa::Exit);
+      }
+      let _ = a.join();
+      let mut lock = output.lock().unwrap();
+      let slopb = lock.message.clone();
+      let slop = slopb[received.len()..].to_vec();
+      //println!("slop: {slop:#?}");
+      return (slop, Fructa::Pass)
+    },
+    _ => {(vec![], evaluate_event(KeyEvent::from(chr)))}//Char(String)
+  }
+}
+
+
+fn evaluate_event(event: KeyEvent) -> Fructa {
+  let mut lock = SIGHANDLER.lock().unwrap();
+  match event.code {
+    KeyCode::Enter => {
+      lock.shell.input += "\n";
+      //println!();
+      match lock.shell.run() {
+        Fructa::Exit => return Fructa::Exit,
+        _ => {lock.shell.redraw()},
+      };
+    },
+    KeyCode::Escape => {
+      lock.shell.state = match lock.shell.state {
+        State::RSearch => State::Normal,
+        State::Normal => State::Normal,
+      }
+    },
+    KeyCode::Char(c) => {
+      match lock.shell.state {
+        State::Normal => {
+          if event.modifiers.contains(&Modifier::Control) {
+            match (&c) as &str { /* replace \u with just the key eg. `r` */
+              "r" => {lock.shell.state = State::RSearch;lock.shell.redraw();},
+              "l" => {lock.shell.clear();lock.shell.redraw();},
+              "d" => {if lock.shell.input.is_empty() {println!();return Fructa::Exit} else {return Fructa::Pass}},
+              _ => {},
+            }
+          } else {
+            print!("{c}");
+            let mut left = lock.shell.input[..lock.shell.cursor as usize].to_string();
+            let right = &lock.shell.input[lock.shell.cursor as usize..];
+            left += &c.to_string();
+            left += right;
+            lock.shell.input = left;
+            lock.shell.cursor += 1;
+            lock.shell.redraw_from_cursor();
+            //print!("\x1b[1C");
+            
+            //print!("{}", c);
+            //io::stdout().flush().unwrap();
+          }
+        },
+        State::RSearch => {
+          if !event.modifiers.contains(&Modifier::Control) {
+            print!("{}", c);
+            io::stdout().flush().unwrap();
+            lock.shell.input += &c.to_string();
+          }
+        },
+      }
+    },
+    KeyCode::Backspace => {
+      if lock.shell.cursor > 0 {
+        let mut left = lock.shell.input[..(lock.shell.cursor-1) as usize].to_string();
+        left += &lock.shell.input[lock.shell.cursor as usize..].to_string();
+        lock.shell.input = left;
+        lock.shell.cursor -= 1;
+        print!("\x1b[1D");
+        lock.shell.redraw_from_cursor();
+        //io::stdout().flush().unwrap();
+      }
+    },
+    KeyCode::Arrow(d) => {
+      match d {
+        Direction::Up => todo!(),
+        Direction::Down => todo!(),
+        Direction::Left => {if lock.shell.cursor>0 {lock.shell.cursor-=1; print!("\x1b[1D"); io::stdout().flush().unwrap();}},
+        Direction::Right => {if lock.shell.cursor <(lock.shell.input.len() as u16) {lock.shell.cursor+=1; print!("\x1b[1C"); io::stdout().flush().unwrap();}},
+      }
+    },
+    _ => {}
+  }
+  drop(lock);
+  Fructa::Pass
+}
+
+use std::os::fd::AsRawFd;
+use std::os::unix::net::UnixStream;
 fn main() {
   setup_termios();
   enable_raw_mode();
   println!();
-  SIGHANDLER.lock().unwrap().shell = Shell {input: String::new(), state: State::Normal, cursor: 0};
+  io::stdout().flush().unwrap();
   
 
 
-  env::set_var("HOSTNAME", str::from_utf8(&Command::new("hostname").output().unwrap().stdout).unwrap().trim()); // this is cheating I think
-  
+  unsafe{env::set_var("HOSTNAME", str::from_utf8(&Command::new("hostname").output().unwrap().stdout).unwrap().trim());} // this is cheating I think
+
+
+  let (mut sigstream1, mut sigstream2) = UnixStream::pair().unwrap();
 
   unsafe {
+    WRITE_END = Some(sigstream2.as_raw_fd());
     libc::signal(libc::SIGINT, get_sighandler());
   }
 
+
+  thread::spawn(move || {
+    let mut buf = [0u8; 128];
+    loop {
+      match sigstream1.read(&mut buf) {
+        Ok(n) if n > 0 => {
+          //let msg = String::from_utf8_lossy(&buf[..n]);
+          let mut lock = SIGHANDLER.lock().unwrap();
+          lock.shell.ctrl_c();
+          drop(lock);
+          //println!("Received: {}", msg);
+        }
+        Ok(_) => {} // no data
+        Err(e) => {
+          eprintln!("Read error: {}", e);
+          break;
+        }
+      }
+    }
+  });
+
+
+
+
   let NULL: *const i8 = null();
-  let lock = SIGHANDLER.lock().unwrap();
+  let mut lock = SIGHANDLER.lock().unwrap();
+  lock.shell = Shell {input: String::new(), state: State::Normal, cursor: 0};
   lock.shell.redraw();
   drop(lock);
-  for c in io::stdin().bytes() {
-    let c: char = c.unwrap() as char;
-        
-    let mut modifiers: Vec<Modifier> = vec![];
-    if c.is_control() && ![ENTER, TAB, ESCAPE, BACKSPACE].contains(&c) {
-      modifiers.push(Modifier::Control);
+
+  let mut buf = vec![];
+  let mut code = Fructa::Pass;
+  'a: for c in io::stdin().bytes() {
+    buf.push(c.unwrap());
+    while !buf.is_empty() && let Ok(chr) = str::from_utf8(&buf) {
+      (buf, code) = handle_input(chr);
+      if code == Fructa::Exit {
+        break 'a
+      }
     }
-    
-    let event = KeyEvent{
-      code: match c {BACKSPACE => KeyCode::Backspace, '\n' => KeyCode::Enter,
-          
-          'Ã' => {
-            match getch() {
-              '³' => KeyCode::Char('ó'),
-              '\u{93}' => KeyCode::Char('Ó'),
-              _ => KeyCode::Escape
-            }
-          },
-          'Ä' => {
-            match getch() {
-              '\u{99}' => KeyCode::Char('ę'),
-              '\u{98}' => KeyCode::Char('Ę'),
-              '\u{87}' => KeyCode::Char('ć'),
-              '\u{86}' => KeyCode::Char('Ć'),
-              '\u{85}' => KeyCode::Char('ą'),
-              '\u{84}' => KeyCode::Char('Ą'),
-              _ => KeyCode::Escape
-            }
-          },
-          'Å' => {
-            match getch() {
-              '\u{84}' => KeyCode::Char('ń'),
-              '\u{83}' => KeyCode::Char('Ń'),
-              '\u{82}' => KeyCode::Char('ł'),
-              '\u{81}' => KeyCode::Char('Ł'),
-              '\u{9b}' => KeyCode::Char('ś'),
-              '\u{9a}' => KeyCode::Char('Ś'),
-              'º' => KeyCode::Char('ź'),
-              '¹' => KeyCode::Char('Ź'),
-              '¼' => KeyCode::Char('ż'),
-              '»' => KeyCode::Char('Ż'),
-              _ => KeyCode::Escape
-            }
-          },
-          '\u{1b}' => {
-              match getch() {
-                    '[' => {
-                        match getch() {
-                            'A' => KeyCode::Arrow(Direction::Up), 'B' => KeyCode::Arrow(Direction::Down), 'C' => KeyCode::Arrow(Direction::Right), 'D' => KeyCode::Arrow(Direction::Left),
-                            '1' => match getch() {
-                                ';' => match getch() 
-                                { '5' => {modifiers.push(Modifier::Control); get_arrow()}, '2' => {modifiers.push(Modifier::Shift); get_arrow()}, _ => KeyCode::Escape}, _ => KeyCode::Escape
-                            },
-                            '3' => match getch() {
-                              '~' => KeyCode::Delete,
-                              _ => KeyCode::Escape,
-                            }
-                            _ => KeyCode::Escape,
-                        }
-                    },
-                   _ => KeyCode::Escape}},
-          _ => KeyCode::Char(c)},
-      modifiers,
-    };
-
-    let mut lock = SIGHANDLER.lock().unwrap();
-    
-    match event.code {
-      KeyCode::Enter => {
-        lock.shell.input += "\n";
-        println!();
-        match lock.shell.run() {
-          Fructa::Exit => break,
-          _ => {lock.shell.redraw(); continue},
-        };
-      },
-      KeyCode::Escape => {
-        lock.shell.state = match lock.shell.state {
-          State::RSearch => State::Normal,
-          State::Normal => State::Normal,
-        }
-      },
-      KeyCode::Char(c) => {
-        match lock.shell.state {
-          State::Normal => {
-            if event.modifiers.contains(&Modifier::Control) {
-              match c {
-                '\u{12}' => {lock.shell.state = State::RSearch;lock.shell.redraw();},
-                '\u{c}' => {lock.shell.clear();lock.shell.redraw();},
-                '\u{4}' => {if lock.shell.input.is_empty() {break}},
-                _ => {},
-              }
-            } else {
-              lock.shell.cursor += 1;
-              print!("{}", c);
-              io::stdout().flush().unwrap();
-              
-              lock.shell.input += &c.to_string();
-            }
-          },
-          State::RSearch => {
-            if !event.modifiers.contains(&Modifier::Control) {
-              print!("{}", c);
-              io::stdout().flush().unwrap();
-              lock.shell.input += &c.to_string();
-            }
-          },
-        }
-      },
-      KeyCode::Backspace => {
-        if lock.shell.cursor > 0 {
-          let mut left = lock.shell.input[..(lock.shell.cursor-1) as usize].to_string();
-          left += &lock.shell.input[lock.shell.cursor as usize..].to_string();
-          lock.shell.input = left;
-          lock.shell.cursor -= 1;
-
-          //io::stdout().flush().unwrap();
-          lock.shell.redraw();
-        }
-      },
-      KeyCode::Arrow(d) => {
-        match d {
-          Direction::Up => todo!(),
-          Direction::Down => todo!(),
-          Direction::Left => {if lock.shell.cursor>0 {lock.shell.cursor-=1; print!("\x1b[1D"); io::stdout().flush().unwrap();}},
-          Direction::Right => {if lock.shell.cursor <(lock.shell.input.len() as u16) {lock.shell.cursor+=1; print!("\x1b[1C"); io::stdout().flush().unwrap();}},
-        }
-      },
-      _ => {}
-    }
-
-    /*ENTER
-    */
   }
 }

@@ -10,6 +10,7 @@ pub trait ShellBuiltIns {
   fn clear(&self);
   fn clear_line(&self);
   fn redraw(&self);
+  fn redraw_from_cursor(&self);
   fn ctrl_c(&mut self);
 }
 
@@ -25,13 +26,24 @@ impl ShellBuiltIns for crate::Shell {
     io::stdout().flush().unwrap();
   }
   fn clear_line(&self) {
-    print!("\x1b[2K");
+    print!("\x1b[2K"); // clear entire line
+    io::stdout().flush().unwrap();
+  }
+  fn redraw_from_cursor(&self) {
+    /*if self.cursor > 0 {
+      print!("\x1b[1D");
+    }*/
+    print!("\x1b[0K"); // clear from cursor
+    if (self.cursor as usize ) < self.input.len() {
+      print!("{}", self.input[self.cursor as usize..].to_string());
+      print!("\x1b[{}D", self.input[self.cursor as usize..].to_string().len());
+    }
     io::stdout().flush().unwrap();
   }
   fn redraw(&self) {
     self.clear_line();
     let mut combined_string = String::new();
-    combined_string += &format!("\x1b[1E\x1b[1F");
+    //combined_string += &format!("\x1b[1E\x1b[1F");
     match self.state {
       State::Normal => {
         combined_string += &format!("{}", self);
@@ -51,16 +63,17 @@ impl ShellBuiltIns for crate::Shell {
     io::stdout().flush().unwrap();
   }
   fn run(&mut self) -> Fructa {
-    if self.input.is_empty() {
+    println!();
+    /*if self.input.is_empty() {
       return Fructa::Exit;
-    }
+    }*/
 
     let tokens = self.tokenize(self.input.clone());
     //println!("TOKENS: {:#?}", tokens);
     let nodes = self.parse(tokens);
     //println!("NODES: {:#?}", nodes);
     self.evaluate_program(nodes);
-    println!();
+    //println!();
     /*match tokens[0] {
       "cd" => {println!("{:#?}", self.cd(tokens[1].to_string()))},
       "exit" => {return Fructa::Exit;},
