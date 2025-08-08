@@ -1,7 +1,7 @@
 use {
   crate::shell::language::SHLanguage,
   crate::{Fructa,State},
-  std::{ffi::CString, io::{self,Write}},
+  std::{ffi::CString, io::{self,Write}, process::Command},
 };
 
 pub trait ShellBuiltIns {
@@ -12,6 +12,7 @@ pub trait ShellBuiltIns {
   fn redraw(&self);
   fn redraw_from_cursor(&self);
   fn ctrl_c(&mut self);
+  fn update‍_dir(&mut self);
 }
 
 impl ShellBuiltIns for crate::Shell {
@@ -19,6 +20,9 @@ impl ShellBuiltIns for crate::Shell {
     println!("^C");
     self.input = String::new();
     self.cursor = 0;
+    self.flags.set("last".to_string(), crate::Value::KeyEvent(
+            crate::KeyEvent {code: crate::KeyCode::Char("c".to_string()), 
+                modifiers: vec![crate::Modifier::Control]})).unwrap();
     self.redraw();
   }
   fn clear(&self) {
@@ -86,7 +90,11 @@ impl ShellBuiltIns for crate::Shell {
   }
   fn cd(&mut self, path: String) -> i32 {
     let path = CString::new(path).unwrap();
-    unsafe {libc::chdir(path.as_ptr()) }
+    let out = unsafe {libc::chdir(path.as_ptr()) };
+    self.update‍_dir();
+    out
+  }
+  fn update‍_dir(&mut self) {
+    self.dir = str::from_utf8(&Command::new("pwd").output().unwrap().stdout).unwrap().trim().to_string();
   }
 }
-

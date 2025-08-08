@@ -1,5 +1,9 @@
+// todo: redefine dir only upon chdir, to not query env every time
+
 mod shell;
 mod jobs;
+
+use crate::jobs::JobManager;
 
 use {
   shell::{builtins::ShellBuiltIns, language::SHLanguage},
@@ -15,14 +19,107 @@ enum Fructa {
 }
 
 
+#[derive(Debug,Clone,PartialEq)]
+enum Action {
+  Clear,
+  Halt,
+  Exit,
+}
+impl Shell {
+  fn execute(&mut self, action: Action) -> Result<Fructa,()> {
+    let last = if let Ok(l) = self.flags
+      .get("last".to_string()) {match l{
+    Value::KeyEvent(e) => e,
+    _ => panic!()
+  }} else {KeyEvent::from("\0")};
+
+    match action {
+      Action::Clear => {
+        if last != KeyEvent::from("\u{c}") {
+          self.clear();
+          self.redraw();
+        }
+        Ok(Fructa::Pass)
+      }
+      Action::Halt => {
+        self.ctrl_c();
+        Ok(Fructa::Pass)
+      }
+      Action::Exit => {
+        if self.input.is_empty() {
+          println!("");
+          return Ok(Fructa::Exit);
+        }
+        Ok(Fructa::Pass)
+      }
+    }
+  }
+}
 
 
+#[derive(Debug,Clone)]
+struct Dict<a,b> {
+  values: Vec<(a,b)>
+}
+impl<a: std::cmp::PartialEq+ std::fmt::Debug,b: Clone> Dict<a,b> {
+  fn get(&self, key: a) -> Result< b,() > {
+    for i in &self.values {
+      if i.0 == key {
+        return Ok(i.1.clone())
+      }
+    }
+    Err(())
+  }
+  fn contains(&self, key: &a) -> bool {
+    for i in &self.values {
+      if &i.0 == key {
+        return true;
+      }
+    }
+    false
+  }
+  fn set(&mut self, key: a, value: b) -> Result<(),()> {
+    if self.contains(&key) {
+      for i in &mut self.values {
+        if i.0 == key {
+          i.1 = value.clone();
+        }
+      }
+    } else {
+      self.values.push((key, value));
+    }
+    Ok(())
+  }
+  fn new() -> Dict<a,b> {
+    Dict { values: vec![] }
+  }
+}
 
-#[derive(Clone)]
+
+#[derive(Debug,Clone,PartialEq)]
+enum Value {
+  String(String),
+  Int(i32),
+  Bool(bool),
+  KeyEvent(KeyEvent),
+}
+impl Value {
+  fn as_str(&self) -> Result<String,()> {
+    match self { Value::String(s) => Ok(s.to_string()), _ => Err(()) }
+  }
+}
+
+//#[derive(Clone)]
 struct Shell {
   input: String,
   state: State,
   cursor: u16,
+  binds: Vec<(KeyEvent, Action)>,
+  flags: Dict<String,Value>,
+  cached: Dict<String,Value>,
+
+  jobmgr: JobManager,
+  dir: String,
 }
 
 #[derive(Clone)]
@@ -34,16 +131,18 @@ enum State {
 
 impl Display for Shell {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let hostname = match &env::var("HOSTNAME") {
-      Ok(s) => s.clone(),
-      Err(_) => String::from("???"),
+    let ps1 = match env::var("PS1") {
+      Ok(s) => s,
+      Err(_) => "[\\u@\\h:\\d]$".to_string()
     };
-    let user = match &env::var("USER") {
-      Ok(s) => s.clone(),
-      Err(_) => String::from("???"),
-    };
-    let dir = str::from_utf8(&Command::new("pwd").output().unwrap().stdout).unwrap().trim().replace(&env::var("HOME").unwrap(), "~");
-    write!(f, "[{user}@{hostname}:{dir}]$")
+    let dir = self.dir.replace(&env::var("HOME").unwrap(), "~");
+    
+    let ps1 = ps1
+      .replace("\\d", &dir)
+      .replace("\\u", &self.cached.get("username".to_string()).unwrap().as_str().unwrap())
+      .replace("\\h", &self.cached.get("hostname".to_string()).unwrap().as_str().unwrap());
+    write!(f, "{}", ps1)
+    //write!(f, "[{user}@{hostname}:{dir}]$")
   }
 }
 
@@ -74,7 +173,7 @@ fn enable_raw_mode() {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug,Clone,PartialEq)]
 pub struct KeyEvent {
   pub code: KeyCode,
   pub modifiers: Vec<Modifier>,
@@ -136,14 +235,14 @@ impl KeyEvent {
     Self {code, modifiers: vec![]}
   }
 }
-#[derive(Debug,PartialEq)]
+#[derive(Debug,Clone,PartialEq)]
 pub enum Modifier {
   Control,
   Shift,
   Alt,
   //why even do it at this point
 }
-#[derive(Debug,PartialEq)]
+#[derive(Debug,Clone,PartialEq)]
 pub enum Direction {
   Up,
   Down,
@@ -151,7 +250,7 @@ pub enum Direction {
   Left
 }
 
-#[derive(Debug,PartialEq)]
+#[derive(Debug,Clone,PartialEq)]
 pub enum KeyCode {
   Escape,
   Enter,
@@ -180,7 +279,18 @@ fn get_arrow() -> KeyCode {
 struct SigHandler {shell: Shell}
 
 impl SigHandler {}
-static SIGHANDLER: Mutex<SigHandler> = Mutex::new(SigHandler {shell: Shell {input: String::new(), state: State::Normal, cursor: 0}});
+static SIGHANDLER: Mutex<SigHandler> = Mutex::new(
+  SigHandler {shell: Shell {
+    input: String::new(), 
+    state: State::Normal, 
+    cursor: 0,
+    binds:vec![],
+    flags:Dict { values: vec![] },
+    cached:Dict { values: vec![] },
+    jobmgr: JobManager {jobs: vec![], hook: 0},
+    dir: String::new()
+  }}
+);
 
 
 
@@ -249,8 +359,26 @@ fn handle_input(chr: &str) -> (Vec<u8>, Fructa) {
 }
 
 
+
+
+
+
 fn evaluate_event(event: KeyEvent) -> Fructa {
   let mut lock = SIGHANDLER.lock().unwrap();
+    
+  if let Some(x) = 
+      lock.shell.binds.iter().filter(|x| x.0 == event).last() {
+    let xc = x.1.clone();
+    let exec = lock.shell.execute(xc);
+    lock.shell.flags.set("last".to_string(), 
+      Value::KeyEvent(event.clone())).unwrap();
+    return exec.unwrap();
+  }
+
+  lock.shell.flags.set("last".to_string(), 
+      Value::KeyEvent(event.clone())).unwrap();
+
+
   match event.code {
     KeyCode::Enter => {
       lock.shell.input += "\n";
@@ -266,14 +394,15 @@ fn evaluate_event(event: KeyEvent) -> Fructa {
         State::Normal => State::Normal,
       }
     },
-    KeyCode::Char(c) => {
+    KeyCode::Char(ref c) => {
       match lock.shell.state {
         State::Normal => {
           if event.modifiers.contains(&Modifier::Control) {
             match (&c) as &str { /* replace \u with just the key eg. `r` */
               "r" => {lock.shell.state = State::RSearch;lock.shell.redraw();},
-              "l" => {lock.shell.clear();lock.shell.redraw();},
-              "d" => {if lock.shell.input.is_empty() {println!();return Fructa::Exit} else {return Fructa::Pass}},
+              //"l" => {if last!=event {lock.shell.clear();lock.shell.redraw();}},
+              //"c" => { lock.shell.ctrl_c(); },
+              //"d" => {if lock.shell.input.is_empty() {println!("^D");return Fructa::Exit;}},
               _ => {},
             }
           } else {
@@ -352,9 +481,7 @@ fn main() {
       match sigstream1.read(&mut buf) {
         Ok(n) if n > 0 => {
           //let msg = String::from_utf8_lossy(&buf[..n]);
-          let mut lock = SIGHANDLER.lock().unwrap();
-          lock.shell.ctrl_c();
-          drop(lock);
+          evaluate_event(KeyEvent::from("\u{3}"));
           //println!("Received: {}", msg);
         }
         Ok(_) => {} // no data
@@ -369,9 +496,32 @@ fn main() {
 
 
 
-  let NULL: *const i8 = null();
   let mut lock = SIGHANDLER.lock().unwrap();
-  lock.shell = Shell {input: String::new(), state: State::Normal, cursor: 0};
+  lock.shell = Shell {input: String::new(), state: State::Normal, cursor: 0, 
+    flags: Dict { values: vec![] },
+    cached: Dict { values: vec![] },
+    binds: vec![],
+    jobmgr: JobManager {jobs: vec![], hook: 0},
+    dir: String::new(),
+  };
+  lock.shell.update‍_dir();
+
+  let username = str::from_utf8(&Command::new("whoami").output().unwrap().stdout).unwrap().trim().to_string();
+  let hostname = str::from_utf8(&Command::new("hostname").output().unwrap().stdout).unwrap().trim().to_string();
+  lock.shell.cached.set("username".to_string(), Value::String(username));
+  lock.shell.cached.set("hostname".to_string(), Value::String(hostname));
+  let cpat = &(env::home_dir().unwrap()
+    .as_os_str().to_str().unwrap().to_string() + "/.shell.fok");
+  if fs::exists(cpat).unwrap() {
+    //lock.shell.load_configurarion(cpat);
+  } else {
+    lock.shell.binds = vec![
+      (/*‍^L*/KeyEvent::from("\u{c}"), Action::Clear),
+      (/*^C*/KeyEvent::from("\u{3}"), Action::Halt),
+      (/*^D*/KeyEvent::from("\u{4}"), Action::Exit),
+    ];
+  }
+
   lock.shell.redraw();
   drop(lock);
 

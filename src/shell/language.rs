@@ -335,7 +335,7 @@ impl SHLanguage for crate::Shell {
               "cd" => {println!("{:#?}", self.cd(tokens[1].to_string()))},
               "exit" => {return SHFructa::SigExit;},
               "clear"  => {self.clear();},
-              _ => spawn_proc(tokens.iter().map(|x| x as &str).collect::<Vec<&str>>()),
+              _ => {self.jobmgr.spawn_job(tokens.iter().map(|x| x as &str).collect::<Vec<&str>>(), true, Target::Stdio, self.dir.clone());},
             }
             SHFructa::ProcExit
           },
