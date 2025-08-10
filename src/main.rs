@@ -118,6 +118,9 @@ struct Shell {
   flags: Dict<String,Value>,
   cached: Dict<String,Value>,
 
+  history: Vec<String>,
+  history_index: usize,
+
   jobmgr: JobManager,
   dir: String,
 }
@@ -133,14 +136,16 @@ impl Display for Shell {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let ps1 = match env::var("PS1") {
       Ok(s) => s,
-      Err(_) => "[\\u@\\h:\\d]$".to_string()
+      Err(_) => "[{user}@{host}:{dir}]$".to_string()
     };
     let dir = self.dir.replace(&env::var("HOME").unwrap(), "~");
     
+
+    // make it parse as foklang instead
     let ps1 = ps1
-      .replace("\\d", &dir)
-      .replace("\\u", &self.cached.get("username".to_string()).unwrap().as_str().unwrap())
-      .replace("\\h", &self.cached.get("hostname".to_string()).unwrap().as_str().unwrap());
+      .replace("{dir}", &dir)
+      .replace("{user}", &self.cached.get("username".to_string()).unwrap().as_str().unwrap())
+      .replace("{host}", &self.cached.get("hostname".to_string()).unwrap().as_str().unwrap());
     write!(f, "{}", ps1)
     //write!(f, "[{user}@{hostname}:{dir}]$")
   }
@@ -281,14 +286,18 @@ struct SigHandler {shell: Shell}
 impl SigHandler {}
 static SIGHANDLER: Mutex<SigHandler> = Mutex::new(
   SigHandler {shell: Shell {
-    input: String::new(), 
-    state: State::Normal, 
+    input:  String::new(), 
+    state:  State::Normal, 
     cursor: 0,
-    binds:vec![],
-    flags:Dict { values: vec![] },
-    cached:Dict { values: vec![] },
+    binds:  vec![],
+    flags:  Dict { values: vec![] },
+    cached: Dict { values: vec![] },
     jobmgr: JobManager {jobs: vec![], hook: 0},
-    dir: String::new()
+    dir:    String::new(),
+
+    history: vec![],
+    history_index: 0,
+
   }}
 );
 
@@ -407,8 +416,8 @@ fn evaluate_event(event: KeyEvent) -> Fructa {
             }
           } else {
             print!("{c}");
-            let mut left = lock.shell.input[..lock.shell.cursor as usize].to_string();
-            let right = &lock.shell.input[lock.shell.cursor as usize..];
+            let mut left = lock.shell.chr_input()[..lock.shell.cursor as usize].concat();
+            let right = &lock.shell.chr_input()[lock.shell.cursor as usize..].concat();
             left += &c.to_string();
             left += right;
             lock.shell.input = left;
@@ -431,8 +440,8 @@ fn evaluate_event(event: KeyEvent) -> Fructa {
     },
     KeyCode::Backspace => {
       if lock.shell.cursor > 0 {
-        let mut left = lock.shell.input[..(lock.shell.cursor-1) as usize].to_string();
-        left += &lock.shell.input[lock.shell.cursor as usize..].to_string();
+        let mut left = lock.shell.chr_input()[..(lock.shell.cursor-1) as usize].concat();
+        left += &lock.shell.chr_input()[lock.shell.cursor as usize..].concat();
         lock.shell.input = left;
         lock.shell.cursor -= 1;
         print!("\x1b[1D");
@@ -445,7 +454,7 @@ fn evaluate_event(event: KeyEvent) -> Fructa {
         Direction::Up => todo!(),
         Direction::Down => todo!(),
         Direction::Left => {if lock.shell.cursor>0 {lock.shell.cursor-=1; print!("\x1b[1D"); io::stdout().flush().unwrap();}},
-        Direction::Right => {if lock.shell.cursor <(lock.shell.input.len() as u16) {lock.shell.cursor+=1; print!("\x1b[1C"); io::stdout().flush().unwrap();}},
+        Direction::Right => {if lock.shell.cursor <(lock.shell.chr_input().len() as u16) {lock.shell.cursor+=1; print!("\x1b[1C"); io::stdout().flush().unwrap();}},
       }
     },
     _ => {}
@@ -503,6 +512,8 @@ fn main() {
     binds: vec![],
     jobmgr: JobManager {jobs: vec![], hook: 0},
     dir: String::new(),
+    history: vec![],
+    history_index: 0,
   };
   lock.shell.update‍_dir();
 
@@ -521,6 +532,13 @@ fn main() {
       (/*^D*/KeyEvent::from("\u{4}"), Action::Exit),
     ];
   }
+  
+  let hpat = &(env::home_dir().unwrap()
+    .as_os_str().to_str().unwrap().to_string() + "/.foksh_history");
+  if fs::exists(hpat).unwrap() {
+    //load history
+    lock.shell.history = fs::read_to_string(hpat).unwrap().split("\n").into_iter().map(|x| x.to_string()).collect::<Vec<String>>();
+  }
 
   lock.shell.redraw();
   drop(lock);
@@ -536,4 +554,6 @@ fn main() {
       }
     }
   }
+  let mut lock = SIGHANDLER.lock().unwrap();
+  lock.shell.exit();
 }

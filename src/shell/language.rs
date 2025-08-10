@@ -1,6 +1,5 @@
 use {
-  std::fs,
-  crate::{shell::builtins::ShellBuiltIns, jobs::*}
+  crate::{jobs::*, shell::builtins::{displayable, ShellBuiltIns}}, std::{error::Error, fs}
 };
 
 
@@ -69,7 +68,7 @@ pub trait SHLanguage {
   fn evaluate_and(&mut self, node: Node, eval: EvalType) -> SHFructa;
 }
 
-
+const OPERATORS: [&str; 7] = ["\"", "|", ";", "&", ">", "\n", " "];
 
 impl SHLanguage for crate::Shell {
   fn is_alpha(&self, chr: char) -> bool {
@@ -77,15 +76,14 @@ impl SHLanguage for crate::Shell {
   }
   fn tokenize(&self, input: String) -> Vec<Token> {
     let mut result = vec![];
-    let mut input = input.chars().collect::<Vec<char>>();
-    let mut delete;
+    //let mut input = input.chars().collect::<Vec<char>>();
+    let mut input = displayable(input);
     while input.len() > 0 {
-      delete = true;
-      result.push(match input[0] {
-        '"' => {
+      result.push(match &input[0] as &str {
+        "\"" => {
           input.remove(0);
           let mut buffer = String::new();
-          while input.len() > 0 && input[0]!='"' {
+          while input.len() > 0 && input[0]!="\"" {
             buffer += &input[0].to_string();
             input.remove(0);
           }
@@ -94,38 +92,31 @@ impl SHLanguage for crate::Shell {
           }
           Token::String(buffer)
         },
-        '|' => Token::Pipe,
-        ';' => Token::Semicolon,
-        '&' => {
-          match input[1] {
-            '&' => {input.remove(0); Token::And},
+        "|" => Token::Pipe,
+        ";" => Token::Semicolon,
+        "&" => {
+          match &input[1] as &str {
+            "&" => {input.remove(0); Token::And},
             _ => Token::Null,
           }
         }
-        '>' => {
-          match input[1] {
-            '>' => {input.remove(0); Token::AppendableRedirection},
+        ">" => {
+          match &input[1] as &str {
+            ">" => {input.remove(0); Token::AppendableRedirection},
             _ => Token::Redirection,
           }
         },
-        '\n' => Token::Enter,
+        "\n" => Token::Enter,
         _ => {
-          if self.is_alpha(input[0]) {
-            delete = false;
-            let mut buffer = String::new();
-            while input.len()>0 && self.is_alpha(input[0]) {
-              buffer += &input[0].to_string();
-              input.remove(0);
-            }
-            Token::File(buffer)
-          } else {
-            Token::Null
+          let mut buffer = String::new();
+          while input.len()>0 && !OPERATORS.contains(&(&input[0] as &str)) { //self.is_alpha(input[0]) {
+            buffer += &input[0].to_string();
+            input.remove(0);
           }
+          Token::File(buffer)
         },
       });
-      if delete {
-        input.remove(0);
-      }
+      input.remove(0);
     }
     result.iter().filter(|x| x!=&&Token::Null).collect::<Vec<&Token>>().iter().map(|x| x.clone().to_owned()).collect::<Vec<Token>>()
   }
@@ -335,7 +326,13 @@ impl SHLanguage for crate::Shell {
               "cd" => {println!("{:#?}", self.cd(tokens[1].to_string()))},
               "exit" => {return SHFructa::SigExit;},
               "clear"  => {self.clear();},
-              _ => {self.jobmgr.spawn_job(tokens.iter().map(|x| x as &str).collect::<Vec<&str>>(), true, Target::Stdio, self.dir.clone());},
+              _ => {
+                let args = tokens.iter().map(|x| x as &str).collect::<Vec<&str>>();
+                match self.jobmgr.spawn_job(args.clone(), true, Target::Stdio, self.dir.clone()) {
+                  Err(e) => {println!("{}: {e}", args[0])},
+                  _ => {}
+                }
+              },
             }
             SHFructa::ProcExit
           },

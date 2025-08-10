@@ -1,4 +1,4 @@
-use {libc::{execvp, wait},std::{ffi::CString, process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio}, ptr::null, str}};
+use {libc::{execvp, wait},std::{ffi::CString, io, process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio}, ptr::null, str}};
 
 #[derive(Debug,PartialEq,Copy,Clone)]
 pub enum JobStatus {
@@ -20,7 +20,7 @@ pub struct Job {
 pub trait JobHandling {
   fn spawn_job(&mut self, 
     args: Vec<&str>, hook: bool, 
-    target: Target, at: String) -> u32;
+    target: Target, at: String) -> Result<u32,io::Error>;
 }
 
 // todo 
@@ -38,11 +38,11 @@ pub enum Target {
   File(String),
 }
 
+
 impl JobHandling for JobManager {
   fn spawn_job(&mut self, 
       args: Vec<&str>, hook: bool, 
-      target: Target, at: String) -> u32 {
-    println!("hhh::{at:#?}:");
+      target: Target, at: String) -> Result<u32,io::Error> {
     let cmd = Command::new(args[0])
       .args(args[1..].iter())
       .current_dir(at)
@@ -68,9 +68,9 @@ impl JobHandling for JobManager {
               (pid as i32, &mut stat_loc, libc::WUNTRACED);
           }
         }
-        pid
+        Ok(pid)
       }
-      Err(_) => panic!("command not found")
+      Err(e) => Err(e)//Err(JobError::CommandNotFound(args[0].to_string()))
     }
   }
 }
