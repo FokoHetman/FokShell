@@ -2,12 +2,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 module FokShell where
 
-import InputHandling (nextEvent)
+import InputHandling (nextEvent, KeyEvent, KeyCode (Character), KeyModifiers (KeyModifiers))
 
 import Data.Text as T
 import System.Exit (exitSuccess, exitFailure)
 import Control.Monad (when, unless)
-import System.IO (hSetEcho, hSetBuffering, stdin, BufferMode (NoBuffering))
+import System.IO (hSetEcho, hSetBuffering, stdin, BufferMode (NoBuffering), hFlush, stdout)
+import System.Directory (getCurrentDirectory, getHomeDirectory)
+import System.Posix (getEffectiveUserName)
 
 class Def a where
   def :: a
@@ -42,23 +44,49 @@ instance Def ShellHooks where
     }
 
 type PromptText = T.Text
-data Swallow = Never | Old PromptText
-data Prompt  = SingleLine PromptText | MultiLine PromptText Swallow
+data Swallow = Never | Swallowed PromptText
+data Prompt  = SingleLine PromptText Swallow | MultiLine PromptText Swallow
+
+
+getFormattedDirectory :: IO T.Text
+getFormattedDirectory = do
+  dir <- getCurrentDirectory
+  home <- getHomeDirectory
+  pure $ T.replace (T.pack home) "~" (T.pack dir)
+
+shortcuts :: [(T.Text, IO T.Text)]
+shortcuts = [("%u", T.pack <$> getEffectiveUserName), ("%d", getFormattedDirectory)]
+
+replaceShortcuts :: [(T.Text, IO T.Text)] -> IO T.Text -> IO T.Text
+replaceShortcuts (x:xs) text = do
+  t <- text
+  replaceShortcuts xs ((\y -> T.replace (fst x) y t) <$> snd x)
+replaceShortcuts [] text = text
+displayPrompt :: Prompt -> IO ()
+displayPrompt = \case 
+  SingleLine text _ -> eputStrf <$> formatted $ pure text
+  MultiLine text _  -> eputStrf <$> formatted $ pure text
+  where
+    formatted :: IO T.Text -> IO Text
+    formatted = replaceShortcuts shortcuts
 
 data ShellConfig = ShellConfig
   { hooks  :: ShellHooks
   , prompt :: Prompt
+  , input  :: T.Text
   }
 
 data State = InputOutput
 
-data ShellProcess = Process ShellConfig State
+
+data ShellProcess = ShellProcess ShellConfig State
 
 
 instance Def ShellConfig where
   def = ShellConfig
     { hooks = def
-    , prompt = SingleLine "%d > "
+    , prompt = SingleLine "%d > " Never
+    , input = ""
     }
 
 fokshell :: ShellConfig -> IO ()
@@ -70,17 +98,33 @@ fokshell config = do
   unless doStart exitSuccess
 
   -- todo: event loop
+  displayPrompt $ prompt config
+  eventLoop $ ShellProcess config InputOutput
 
+
+eventLoop :: ShellProcess -> IO ()
+eventLoop proc = do
   event <- nextEvent
-  print event
-  --process config
-  --exitLoop config
---exitLoop :: ShellConfig -> IO ()
---exitLoop config = do
---  doExit <- exitHook $ hooks config
---  when doExit exitSuccess
---  process config 
---  exitLoop config
+  --print event
+  --newProc <- parseEvent proc event
+  parseEvent proc event >>= eventLoop
+
+eputStrf :: IO T.Text -> IO ()
+eputStrf t = do
+  t >>= \x -> putStr (T.unpack x) <> hFlush stdout
+
+putStrf :: T.Text -> IO ()
+putStrf t = putStr (T.unpack t) <> hFlush stdout
+
+
+parseEvent :: ShellProcess -> KeyEvent -> IO ShellProcess 
+parseEvent (ShellProcess conf state) key = case key of 
+    (KeyModifiers 0, Character rawKey) -> do
+      putStr $ T.unpack rawKey
+      hFlush stdout
+      pure $ ShellProcess (addToInput conf rawKey) state
+  where
+    addToInput c t = conf {input = T.concat [input c, t]}
 
 
 -- reimplement the good input handling
