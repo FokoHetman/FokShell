@@ -9,11 +9,11 @@ import Data.Char (chr, ord)
 import Data.List (singleton)
 
 data Direction = Up | Down | DRight | DLeft
-    deriving Show
+    deriving (Show,Eq)
 data KeyCode = Fn | Escape | Arrow Direction | Enter | Tab | Character T.Text
-    deriving Show
+    deriving (Show,Eq)
 newtype KeyModifiers = KeyModifiers Int
-    deriving Show
+    deriving (Show,Eq)
 control :: KeyModifiers
 control = KeyModifiers 1  -- 2^0
 

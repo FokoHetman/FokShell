@@ -2,9 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 module FokShell where
 
-import InputHandling (nextEvent, KeyEvent, KeyCode (Character), KeyModifiers (KeyModifiers))
+import InputHandling (nextEvent, KeyEvent, KeyCode (Character), KeyModifiers (KeyModifiers), control)
 
-import Data.Text as T
+import qualified Data.Text as T
 import System.Exit (exitSuccess, exitFailure)
 import Control.Monad (when, unless)
 import System.IO (hSetEcho, hSetBuffering, stdin, BufferMode (NoBuffering), hFlush, stdout)
@@ -15,6 +15,9 @@ class Def a where
   def :: a
 
 type Hook = IO Bool -- bool tells whether to continue afterhand action
+
+type Action = ShellProcess -> IO ShellProcess
+
 
 data ShellHooks = ShellHooks 
   { haltHook  :: Hook -- things to do before a HALT (^C)
@@ -67,17 +70,17 @@ displayPrompt = \case
   SingleLine text _ -> eputStrf <$> formatted $ pure text
   MultiLine text _  -> eputStrf <$> formatted $ pure text
   where
-    formatted :: IO T.Text -> IO Text
+    formatted :: IO T.Text -> IO T.Text
     formatted = replaceShortcuts shortcuts
 
 data ShellConfig = ShellConfig
   { hooks  :: ShellHooks
   , prompt :: Prompt
   , input  :: T.Text
+  , binds  :: [(KeyEvent, Action)]
   }
 
 data State = InputOutput
-
 
 data ShellProcess = ShellProcess ShellConfig State
 
@@ -87,7 +90,14 @@ instance Def ShellConfig where
     { hooks = def
     , prompt = SingleLine "%d > " Never
     , input = ""
+    , binds = def
     }
+
+instance Def [(KeyEvent, Action)] where
+  def = [
+      ((control, Character "h"), \x -> putStrLn "\nhi!" >> pure x)
+    ]
+
 
 fokshell :: ShellConfig -> IO ()
 fokshell config = do
@@ -104,9 +114,10 @@ fokshell config = do
 
 eventLoop :: ShellProcess -> IO ()
 eventLoop proc = do
+  
+  -- implement reversion (event -> string), or also pass the raw string here.
+  -- this will help with a job handler.
   event <- nextEvent
-  --print event
-  --newProc <- parseEvent proc event
   parseEvent proc event >>= eventLoop
 
 eputStrf :: IO T.Text -> IO ()
@@ -123,7 +134,13 @@ parseEvent (ShellProcess conf state) key = case key of
       putStr $ T.unpack rawKey
       hFlush stdout
       pure $ ShellProcess (addToInput conf rawKey) state
+    _ -> do 
+      let bind = filter (\x -> fst x == key) $ binds conf
+      unwrapBind bind $ ShellProcess conf state
   where
+    unwrapBind [x] defval = snd x defval
+    unwrapBind [] defval = pure defval
+    unwrapBind _ _ = undefined
     addToInput c t = conf {input = T.concat [input c, t]}
 
 

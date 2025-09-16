@@ -14,4 +14,5 @@ main = do
   fokshell $ def
     { hooks = myHooks
     , prompt = myPrompt
+    , binds = def
     }
