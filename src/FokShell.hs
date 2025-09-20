@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module FokShell where
 
-import InputHandling (nextEvent, KeyEvent, KeyCode (Character, Escape), KeyModifiers (KeyModifiers), control)
+import InputHandling (nextEvent, KeyEvent, KeyCode (Character, Escape, Enter, Arrow, Backspace), KeyModifiers (KeyModifiers), control, Direction (DLeft, DRight))
 
 import qualified Data.Text as T
 import System.Exit (exitSuccess, exitFailure)
@@ -80,25 +80,13 @@ getFormattedDirectory = do
   home <- getHomeDirectory
   pure $ T.replace (T.pack home) "~" (T.pack dir)
 
-shortcuts :: [(T.Text, IO T.Text)]
-shortcuts = [("%u", T.pack <$> getEffectiveUserName), ("%d", getFormattedDirectory)]
-
-replaceShortcuts :: [(T.Text, IO T.Text)] -> IO T.Text -> IO T.Text
-replaceShortcuts (x:xs) text = do
-  t <- text
-  replaceShortcuts xs ((\y -> T.replace (fst x) y t) <$> snd x)
-replaceShortcuts [] text = text
-displayPrompt :: Prompt -> IO ()
-displayPrompt = \case 
-  SingleLine text _ -> eputStrf <$> formatted $ pure text
-  MultiLine text _  -> eputStrf <$> formatted $ pure text
-  where
-    formatted :: IO T.Text -> IO T.Text
-    formatted = replaceShortcuts shortcuts
 
 data ShellConfig = ShellConfig
   { hooks     :: ShellHooks
   , prompt    :: Prompt
+  
+  , cursorLoc :: Int                  -- from the right, surprisingly
+--, cursor    :: CursorConfig
   , input     :: T.Text
   , binds     :: [(KeyEvent, Action)]
   , lastEvent :: KeyEvent
@@ -115,10 +103,47 @@ instance Def ShellConfig where
     { hooks = def
     , prompt = SingleLine "%d > " Never
     , input = ""
+    
+    , cursorLoc = 0
+
     , binds = def
     , lastEvent = (KeyModifiers 0, Escape)
     , trigger = (KeyModifiers 0, Escape)
     }
+
+
+-- DISPLAY FUNCTIONS
+eputStrf :: IO T.Text -> IO ()
+eputStrf t = t >>= \x -> putStr (T.unpack x) <> hFlush stdout
+
+putStrf :: T.Text -> IO ()
+putStrf t = putStr (T.unpack t) <> hFlush stdout
+
+
+shortcuts :: [(T.Text, IO T.Text)]
+shortcuts = [("%u", T.pack <$> getEffectiveUserName), ("%d", getFormattedDirectory)]
+
+replaceShortcuts :: [(T.Text, IO T.Text)] -> IO T.Text -> IO T.Text
+replaceShortcuts (x:xs) text = do
+  t <- text
+  replaceShortcuts xs ((\y -> T.replace (fst x) y t) <$> snd x)
+replaceShortcuts [] text = text
+
+displayPrompt :: Prompt -> IO ()
+displayPrompt = \case 
+  SingleLine text _ -> eputStrf <$> formatted $ pure text
+  MultiLine text _  -> eputStrf <$> formatted $ pure text
+  where
+    formatted :: IO T.Text -> IO T.Text
+    formatted = replaceShortcuts shortcuts
+
+redrawFromCursor :: ShellConfig -> IO ()
+redrawFromCursor c = putStrf $ T.concat [erase, lefts, cursorCode]
+  where
+    erase = T.pack "\ESC[0K"
+    lefts = T.take (cursorLoc c) (T.reverse $ input c)
+    cursorCode = if T.length lefts > 0 then T.concat ["\ESC[", T.pack $ show $ T.length lefts, "D"] else T.empty
+
 
 haltAction :: Action
 haltAction (ShellProcess config state) = displayPrompt (prompt config) $> ShellProcess (config {input = ""}) state
@@ -178,11 +203,16 @@ eventLoop procRef = do
 
 
 
-eputStrf :: IO T.Text -> IO ()
-eputStrf t = t >>= \x -> putStr (T.unpack x) <> hFlush stdout
+data CursorDirection = CLeft | CRight
 
-putStrf :: T.Text -> IO ()
-putStrf t = putStr (T.unpack t) <> hFlush stdout
+moveCursor :: CursorDirection -> Int -> IO ()
+moveCursor _ 0 = pure ()
+moveCursor CLeft i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "D"
+moveCursor CRight i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "C"
+
+moveCursor':: ShellConfig -> CursorDirection -> Int -> IO ()
+moveCursor' c CLeft  i = when (T.length (input c) > cursorLoc c) (moveCursor CLeft i)
+moveCursor' c CRight i = when (cursorLoc c > 0)  (moveCursor CRight i)
 
 
 updateWithKey :: KeyEvent -> ShellProcess -> ShellProcess
@@ -190,7 +220,20 @@ updateWithKey event (ShellProcess conf state) = ShellProcess conf {lastEvent=eve
 
 parseEvent :: ShellProcess -> KeyEvent -> IO ShellProcess 
 parseEvent (ShellProcess conf state) key = do 
-  out <- case key of 
+  out <- case key of
+  -- KEYS
+    (KeyModifiers 0, Arrow d) -> case d of
+        DLeft   -> moveCursor' conf CLeft  1 $> ShellProcess (conf {cursorLoc = min (cursorLoc conf + 1) (T.length $ input conf)}) state
+        DRight  -> moveCursor' conf CRight 1 $> ShellProcess (conf {cursorLoc = max (cursorLoc conf - 1) 0}) state
+        _       -> undefined
+    (KeyModifiers 0, Enter) -> undefined
+    (KeyModifiers 0, Backspace) -> moveCursor' conf CLeft 1 >> redrawFromCursor nconf $> ShellProcess nconf state
+      where
+        loc = cursorLoc conf 
+        inp = input conf
+        right = T.take loc (T.reverse inp)
+        left  = T.take (T.length inp - T.length right) inp
+        nconf = conf { input = T.concat [T.dropEnd 1 left, right]}
     (KeyModifiers 0, Character rawKey) -> do
       putStr $ T.unpack rawKey
       hFlush stdout

@@ -10,7 +10,7 @@ import Data.List (singleton)
 
 data Direction = Up | Down | DRight | DLeft
     deriving (Show,Eq)
-data KeyCode = Fn | Escape | Arrow Direction | Enter | Tab | Character T.Text
+data KeyCode = Fn | Escape | Arrow Direction | Enter | Tab | Backspace | Delete | Character T.Text
     deriving (Show,Eq)
 newtype KeyModifiers = KeyModifiers Int
     deriving (Show,Eq)
@@ -45,7 +45,7 @@ getInputString = do
     x      -> pure [x]
   where
     getLoop = do
-      more <- hWaitForInput stdin 50
+      more <- hWaitForInput stdin 20
       if more then do
         char <- getChar
         rest <- getLoop
@@ -68,7 +68,8 @@ stringToKeyEvent x
     arrowMatch 'C' = Arrow DRight
     arrowMatch 'D' = Arrow DLeft
     arrowMatch '2' = Fn
-    arrowMatch _ = undefined
+    arrowMatch '3' = Delete
+    arrowMatch x = error [x]
 
     modifierMatch '2' = shift
     modifierMatch '3' = alt
@@ -81,6 +82,7 @@ stringToKeyEvent x
 
     charMatch :: Char -> KeyEvent
     charMatch ch
+              | '\DEL' == ch          = (KeyModifiers 0, Backspace)
               | '\ESC' == ch        = (KeyModifiers 0, Escape)
               | '\t' == ch          = (KeyModifiers 0, Tab)
               | '\n' == ch          = (KeyModifiers 0, Enter)

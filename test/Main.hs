@@ -7,7 +7,7 @@ myHooks :: ShellHooks
 myHooks = def
 
 myPrompt :: Prompt
-myPrompt = SingleLine (T.pack "%d $ ") Never
+myPrompt = SingleLine (T.pack "[%u:%d] $ ") Never
 
 main :: IO ()
 main = do
