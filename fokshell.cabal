@@ -59,11 +59,14 @@ library
 
     -- Modules exported by the library.
     exposed-modules:  FokShell
-                    , InputHandling
+                    , ExposedTypes
+--                    , InputHandling
+--                    , JobManager
 
     -- Modules included in this library but not exported.
-    -- other-modules:
-
+    other-modules:    InputHandling
+                    , JobManager
+                    , InnerTypes
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
 
@@ -73,6 +76,7 @@ library
                     , path
                     , directory
                     , unix
+                    , hostname
 
     -- Directories containing source files.
     hs-source-dirs:   src

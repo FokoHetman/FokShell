@@ -1,6 +1,8 @@
 module Main (main) where
 
+
 import FokShell
+import ExposedTypes
 import Data.Text as T
 
 myHooks :: ShellHooks

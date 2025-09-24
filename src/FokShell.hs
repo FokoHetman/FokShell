@@ -1,8 +1,7 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 module FokShell where
 
-import InputHandling (nextEvent, KeyEvent, KeyCode (Character, Escape, Enter, Arrow, Backspace), KeyModifiers (KeyModifiers), control, Direction (DLeft, DRight))
+import InputHandling (nextEvent)
 
 import qualified Data.Text as T
 import System.Exit (exitSuccess, exitFailure)
@@ -18,149 +17,15 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
 import Data.IORef (newIORef, IORef, writeIORef, readIORef)
 
+import Network.HostName
+import JobManager
 
+import ExposedTypes
 
 -- TODO:
 -- handle printing prompt with input, cursor, etc
 -- job mgr
 
-
-class Def a where
-  def :: a
-
-type Hook = ShellProcess -> IO Bool -- bool tells whether to continue afterhand action
-
-type Action = ShellProcess -> IO ShellProcess
-
-
-data ShellHooks = ShellHooks 
-  { haltHook  :: Hook -- things to do before a HALT (^C)
-  , exitHook  :: Hook -- things to do before exitting (^D, exit, etc)
-  , startHook :: Hook -- like rc
-  , clearHook :: Hook
-  }
-
-
-defaultHaltHook :: Hook 
-defaultHaltHook _ = do
-  putStrLn "^C"
-  pure True
-
-defaultExitHook :: Hook
-defaultExitHook _ = do
-  putStrLn "\nexit"
-  pure True
-
-defaultClearHook :: Hook
-defaultClearHook (ShellProcess conf _) = do
-  if lastEvent conf == trigger conf then
-    pure False
-  else
-    pure True
-
-defaultStartHook :: Hook
-defaultStartHook _ = pure True
-
-instance Def ShellHooks where
-  def = ShellHooks
-    { haltHook  = defaultHaltHook
-    , exitHook  = defaultExitHook
-    , startHook = defaultStartHook
-    , clearHook = defaultClearHook
-    }
-
-type PromptText = T.Text
-data Swallow = Never | Swallowed PromptText
-data Prompt  = SingleLine PromptText Swallow | MultiLine PromptText Swallow
-
-
-getFormattedDirectory :: IO T.Text
-getFormattedDirectory = do
-  dir <- getCurrentDirectory
-  home <- getHomeDirectory
-  pure $ T.replace (T.pack home) "~" (T.pack dir)
-
-
-data ShellConfig = ShellConfig
-  { hooks     :: ShellHooks
-  , prompt    :: Prompt
-  
-  , cursorLoc :: Int                  -- from the right, surprisingly
---, cursor    :: CursorConfig
-  , input     :: T.Text
-  , binds     :: [(KeyEvent, Action)]
-  , lastEvent :: KeyEvent
-  , trigger   :: KeyEvent             -- this should never be overriden globally, locally it should be overwritten with the keyevent trigger (example at ^L handling)
-  }
-
-data State = InputOutput
-
-data ShellProcess = ShellProcess ShellConfig State
-
-
-instance Def ShellConfig where
-  def = ShellConfig
-    { hooks = def
-    , prompt = SingleLine "%d > " Never
-    , input = ""
-    
-    , cursorLoc = 0
-
-    , binds = def
-    , lastEvent = (KeyModifiers 0, Escape)
-    , trigger = (KeyModifiers 0, Escape)
-    }
-
-
--- DISPLAY FUNCTIONS
-eputStrf :: IO T.Text -> IO ()
-eputStrf t = t >>= \x -> putStr (T.unpack x) <> hFlush stdout
-
-putStrf :: T.Text -> IO ()
-putStrf t = putStr (T.unpack t) <> hFlush stdout
-
-
-shortcuts :: [(T.Text, IO T.Text)]
-shortcuts = [("%u", T.pack <$> getEffectiveUserName), ("%d", getFormattedDirectory)]
-
-replaceShortcuts :: [(T.Text, IO T.Text)] -> IO T.Text -> IO T.Text
-replaceShortcuts (x:xs) text = do
-  t <- text
-  replaceShortcuts xs ((\y -> T.replace (fst x) y t) <$> snd x)
-replaceShortcuts [] text = text
-
-displayPrompt :: Prompt -> IO ()
-displayPrompt = \case 
-  SingleLine text _ -> eputStrf <$> formatted $ pure text
-  MultiLine text _  -> eputStrf <$> formatted $ pure text
-  where
-    formatted :: IO T.Text -> IO T.Text
-    formatted = replaceShortcuts shortcuts
-
-redrawFromCursor :: ShellConfig -> IO ()
-redrawFromCursor c = putStrf $ T.concat [erase, lefts, cursorCode]
-  where
-    erase = T.pack "\ESC[0K"
-    lefts = T.take (cursorLoc c) (T.reverse $ input c)
-    cursorCode = if T.length lefts > 0 then T.concat ["\ESC[", T.pack $ show $ T.length lefts, "D"] else T.empty
-
-
-haltAction :: Action
-haltAction (ShellProcess config state) = displayPrompt (prompt config) $> ShellProcess (config {input = ""}) state
-
-exitAction :: Action
-exitAction (ShellProcess _ _) = exitSuccess
-
-clearAction :: Action
-clearAction (ShellProcess c s) = putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt c) $> ShellProcess c s
-
-
-instance Def [(KeyEvent, Action)] where
-  def = [
-        ((control, Character "c"), \(ShellProcess config state) -> haltHook (hooks config) (ShellProcess config state) >>= \x -> if x then haltAction (ShellProcess config state) else pure $ ShellProcess config state)
-      , ((control, Character "d"), \(ShellProcess config state) -> exitHook (hooks config) (ShellProcess config state) >>= \x -> if x then exitAction (ShellProcess config state) else pure $ ShellProcess config state)
-      , ((control, Character "l"), \(ShellProcess config state) -> clearHook(hooks config) (ShellProcess config {trigger=(control, Character "l")} state) >>= \x -> if x then clearAction (ShellProcess config state) else pure $ ShellProcess config state)
-    ]
 
 
 handleSignal :: IORef ShellProcess -> MVar () -> IO ()
@@ -201,23 +66,6 @@ eventLoop procRef = do
   eventLoop procRef
 
 
-
-
-data CursorDirection = CLeft | CRight
-
-moveCursor :: CursorDirection -> Int -> IO ()
-moveCursor _ 0 = pure ()
-moveCursor CLeft i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "D"
-moveCursor CRight i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "C"
-
-moveCursor':: ShellConfig -> CursorDirection -> Int -> IO ()
-moveCursor' c CLeft  i = when (T.length (input c) > cursorLoc c) (moveCursor CLeft i)
-moveCursor' c CRight i = when (cursorLoc c > 0)  (moveCursor CRight i)
-
-
-updateWithKey :: KeyEvent -> ShellProcess -> ShellProcess
-updateWithKey event (ShellProcess conf state) = ShellProcess conf {lastEvent=event} state
-
 parseEvent :: ShellProcess -> KeyEvent -> IO ShellProcess 
 parseEvent (ShellProcess conf state) key = do 
   out <- case key of
@@ -226,14 +74,21 @@ parseEvent (ShellProcess conf state) key = do
         DLeft   -> moveCursor' conf CLeft  1 $> ShellProcess (conf {cursorLoc = min (cursorLoc conf + 1) (T.length $ input conf)}) state
         DRight  -> moveCursor' conf CRight 1 $> ShellProcess (conf {cursorLoc = max (cursorLoc conf - 1) 0}) state
         _       -> undefined
-    (KeyModifiers 0, Enter) -> undefined
+    (KeyModifiers 0, Enter) -> putStrLn "" >> handleJob (ShellProcess conf state)
     (KeyModifiers 0, Backspace) -> moveCursor' conf CLeft 1 >> redrawFromCursor nconf $> ShellProcess nconf state
       where
         loc = cursorLoc conf 
         inp = input conf
-        right = T.take loc (T.reverse inp)
+        right = T.reverse $ T.take loc $ T.reverse inp
         left  = T.take (T.length inp - T.length right) inp
         nconf = conf { input = T.concat [T.dropEnd 1 left, right]}
+    (_, Delete) -> redrawFromCursor nconf $> ShellProcess nconf state
+      where
+        loc = cursorLoc conf 
+        inp = input conf
+        right = T.reverse $ T.take loc $ T.reverse inp
+        left  = T.take (T.length inp - T.length right) inp
+        nconf = conf { input = T.concat [left, T.drop 1 right], cursorLoc = max 0 $ loc - 1}
     (KeyModifiers 0, Character rawKey) -> do
       putStr $ T.unpack rawKey
       hFlush stdout
@@ -247,16 +102,3 @@ parseEvent (ShellProcess conf state) key = do
     unwrapBind [] defval = pure defval
     unwrapBind _ _ = undefined
     addToInput c t = conf {input = T.concat [input c, t]}
-
-
--- reimplement the good input handling
---process :: ShellConfig -> IO ()
---process config = do
---  getChar >>= \case
---    '\x03' -> do
---      _ <- haltHook $ hooks config
---      process config
---    '\x04' -> do
---      pure ()
---    --'\ESC' -> 
---    x -> pure ()
