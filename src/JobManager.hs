@@ -18,6 +18,8 @@ handleJob (ShellProcess conf state) = do
 
   let unodes = cognifyNodes nodes
   print unodes
+  let string = stringify unodes
+  print string
 
   
 
@@ -30,6 +32,13 @@ evaluateNodes :: ShellProcess -> [Node] -> IO ()
 evaluateNodes (ShellProcess conf state) ((String text node):nodes) = undefined--do
     --asText node -- rethink this.
 
+
+stringify :: Maybe [Node] -> Maybe [T.Text]
+stringify nodes = map f <$> nodes
+  where
+    f :: Node -> T.Text
+    f (String t _) = t
+    f (Variant v _) = T.intercalate " " $ fmap f v
 
 cognifyNodes :: Maybe [Node] -> Maybe [Node]
 cognifyNodes nodes = map walkNode <$> nodes
