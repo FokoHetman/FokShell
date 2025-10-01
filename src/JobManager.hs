@@ -8,6 +8,12 @@ import Data.Maybe (fromMaybe)
 import Data.Char (isSpace)
 import Debug.Trace (trace)
 
+-- implementing Call:
+-- create a function: call :: T.Text (prog) -> [T.Text] (args) -> PID 
+-- job manage that.
+
+
+
 handleJob :: ShellProcess -> IO ShellProcess
 handleJob (ShellProcess conf state) = do
   putStrLn $ "Job Manager handling: " ++ T.unpack (input conf)
@@ -43,6 +49,7 @@ stringify nodes = map f <$> nodes
 cognifyNodes :: Maybe [Node] -> Maybe [Node]
 cognifyNodes nodes = map walkNode <$> nodes
 
+-- integrate EnvVar and Call(?) here
 walkNode :: Node -> Node
 walkNode = \case
   String t n -> case walkNode n of 
@@ -68,7 +75,7 @@ getNodes t = if t == T.empty then Just [] else do
   where
     f x y = Just (x:y)
 
-data Node = String T.Text Node | Call Node | Variant [Node] Node | Environment T.Text | Space | EOL
+data Node = String T.Text Node | Call Node | Variant [Node] Node | EnvVar T.Text Node | Space | EOL
   deriving (Show,Eq)
 
 newtype Parser a = Parser {runParser :: T.Text -> Maybe (T.Text, a)}
@@ -95,27 +102,34 @@ tree :: T.Text -> Node
 tree = undefined
 
 parseExpr :: Parser Node
-parseExpr = trace "called" $ eol <|> strings <|> variants
+parseExpr = trace "called" $ eol <|> strings <|> envVars <|> variants
 
 
 --strings :: Parser Node
 --strings = String <$> (charP ' ' *> spanP (/=' ') <* charP ' ') <*> parseExpr
 
-openers = ['{', '(']
-blockers :: [Char]
-blockers = openers ++ "$, })"
+openers = ['{', '(', '"', '$']
+openers, limited, blockers :: [Char]
+limited = openers ++ "$,})\""
+blockers = ' ':limited
 
 strings :: Parser Node
-strings = trace "strings" $ String <$> (ws *> trace "extract" extract blockers) <*> parseExpr
+strings = strings' <|> trace "strings" (String <$> (ws *> trace "extract" extract blockers) <*> parseExpr)
+
+strings' :: Parser Node
+strings' = trace "strings'" $ String <$> (charP '"' *> trace "extract" extract limited <* charP '"') <*> parseExpr
 
 eol :: Parser Node
 eol = Parser $ \x -> if x == T.empty || (T.head x `elem` blockers && T.head x `notElem` openers) then Just (x, EOL) else Nothing
 --separator :: Parser Node
 --separator = Parser $ \x -> if x /= T.empty && T.head x == ' ' then Just (T.drop 1 x, Space) else Nothing
 
+envVars :: Parser Node
+envVars = EnvVar <$> (charP '$' *> extract blockers) <*> parseExpr
+
+
 variants :: Parser Node
 variants = Variant <$> (charP '{' *> ws *> variants' <* ws <* charP '}') <*> trace "parseExpr from variants" parseExpr
-
 
 variants' :: Parser [Node]
 variants' = sepBy (ws *> trace "wooohoo" charP ',' <* ws) parseExpr
