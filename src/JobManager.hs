@@ -6,7 +6,8 @@ import ExposedTypes
 import Control.Applicative
 import Data.Maybe (fromMaybe)
 import Data.Char (isSpace)
-import Debug.Trace (trace)
+import Debug.Trace (trace, traceShow)
+import Control.Arrow (Arrow(second))
 
 -- implementing Call:
 -- create a function: call :: T.Text (prog) -> [T.Text] (args) -> PID 
@@ -32,7 +33,7 @@ data StringComplex = Basic T.Text | Variant [StringComplex] | Combination [Strin
 type Executable = StringComplex
 type Args       = [StringComplex]
 
-data Node = ProgramCall Executable Args
+data Node = ProgramCall Executable Args | And Node Node
   deriving (Show,Eq)
 
 newtype Parser a = Parser {runParser :: T.Text -> Maybe (T.Text, a)}
@@ -55,11 +56,29 @@ instance Alternative Parser where
   (Parser p1) <|> (Parser p2) = Parser $ \input -> p1 input <|> p2 input
 
 
+instance Monad Parser where
+  (>>=) as bs = do 
+    a <- as
+    bs a
 
 
 parseExpr :: Parser Node
-parseExpr = trace "parseExpr" $ pcall -- <|> andand
+parseExpr = pcall <|> andand
 
+
+-- parser for classic && operator
+
+-- blockers are chars that symbolize a beggining of a new NODE, such as AND (`&&`). docs/parsing:1.2 (todo)
+blockers :: String
+blockers = " $&><|"
+
+-- blockers that also block stringcomplex parsing
+stringblockers :: String
+stringblockers = blockers ++ " {,}()"
+
+
+andand :: Parser Node
+andand = And <$> (parseExpr <* ws <* stringP "&&" <* ws) <*> parseExpr
 
 ws :: Parser T.Text
 ws = spanP isSpace
@@ -69,32 +88,41 @@ sepBy :: Parser a
       -> Parser [b]
 sepBy sep element = (:) <$> element <*> many (sep *> element) <|> pure []
 
-
+-- parser for program call, docs/parsing:1.1
 pcall :: Parser Node
-pcall = ProgramCall . capStr
-        <$> (ws *> extractUntil " " <* charP ' ' <* ws)
-        <*> many (capStr <$> (ws *> extractUntil " " <* charP ' ' <* ws))
+{-pcall = Parser f 
+  where
+    f :: T.Text -> Maybe (T.Text, Node)
+    f i = traceShow i $ do
+      (i', mprogram) <- second capStr <$> runParser (ws *> extractUntil " &" <* charP ' ' <* ws) i
+      (i'', margs) <- runParser args i'
+      program <- mprogram
+      _args <- sequence margs
+      Just (i'', ProgramCall program _args)
 
-captureFullString :: Parser StringComplex
---captureFullString = Combination <$> many stringify
-captureFullString = undefined -- loop over or smth I lost a will to live idk
+args :: Parser [Maybe StringComplex] = many (capStr <$> (ws *> extractUntil " &" <* charP ' ' <* ws))
+-}
+pcall = ProgramCall . capStr
+        <$> (ws *> extractUntil blockers <* charP ' ' <* ws)
+        <*> many (capStr <$> (ws *> extractUntil blockers <* charP ' ' <* ws))
+
 
 capStr :: T.Text -> StringComplex
 capStr t = f (runParser stringify t)
   where 
-    f (Just t) = case t of
-      ("", x) -> x
-      (r,  x) -> case capStr r of
+    f t = case t of
+      Just ("", x) -> x
+      Just (r,  x) -> case capStr r of
         Combination y -> Combination (x:y)
         y             -> Combination [x, y]
-
+      Nothing -> error "capStr died lmao"
 stringify :: Parser StringComplex
 stringify = basic <|> variant
 
 
 
 basic :: Parser StringComplex
-basic = Basic <$> extractUntil " $(){,}"
+basic = Basic <$> extractUntil stringblockers
 
 variant :: Parser StringComplex
 variant = Variant <$> (charP '{' *> ws *> variants <* ws <* charP '}')
@@ -104,14 +132,14 @@ variant = Variant <$> (charP '{' *> ws *> variants <* ws <* charP '}')
 extractUntil :: [Char] -> Parser T.Text
 extractUntil b = Parser f'
   where
-    f' t = trace ("extract: `" ++ T.unpack t ++ "`") result
+    f' t = result
       where
         parsed = f t
-        rest = trace ("parsed: " ++ show parsed) T.takeEnd (T.length t - T.length parsed) t
+        rest = T.takeEnd (T.length t - T.length parsed) t
         result =  if T.null parsed then Nothing else Just (rest, parsed)
     f t
-      | T.null t          = trace "works" T.empty
-      | T.head t `elem` b = trace "work2" T.empty
+      | T.null t          = T.empty
+      | T.head t `elem` b = T.empty
       | otherwise         = T.concat [T.singleton $ T.head t, f (T.drop 1 t)]
 
 
@@ -180,7 +208,7 @@ charP x = Parser f
   where
     f t
       | t == T.empty = Just("", x)
-      | T.head t==x = Just (trace ("IMPRO: " ++ [x] ++ " :: " ++ T.unpack t) $ T.drop 1 t, x)
+      | T.head t==x = Just (T.drop 1 t, x)
       | otherwise = Nothing
 
 stringP :: String -> Parser String
