@@ -5,7 +5,7 @@ import qualified Data.Text as T
 import qualified Data.Bits as B
 
 
-import System.Exit (exitSuccess)
+import System.Exit (exitSuccess, ExitCode (ExitSuccess, ExitFailure))
 import Control.Monad (when)
 import System.Directory (getCurrentDirectory, getHomeDirectory)
 import System.Posix (getEffectiveUserName)
@@ -14,6 +14,10 @@ import Data.Functor
 import System.IO (hFlush, stdout)
 
 import Network.HostName
+
+import GHC.IO.Handle
+import System.Process (Pid)
+
 
 class Def a where
   def :: a
@@ -30,6 +34,43 @@ putStrf t = putStr (T.unpack t) <> hFlush stdout
 
 
 
+data Job = Job {
+    pid     :: Maybe Pid
+  , task    :: Task
+  , stdoutj :: Maybe Handle
+  , stderrj :: Maybe Handle
+  , stdinj  :: Maybe Handle
+  , last_ec :: ExitCode
+}
+exitCodeToInt :: ExitCode -> Int
+exitCodeToInt ExitSuccess     = 0
+exitCodeToInt (ExitFailure c) = c
+
+
+newtype JobMgr = JobMgr [Job]
+
+
+data StringComplex = Basic T.Text | Variant [StringComplex] | Combination [StringComplex]
+  deriving (Show,Eq)
+
+complexToText :: StringComplex -> T.Text
+complexToText (Basic t) = t
+complexToText (Variant ts) = undefined--T.unwords $ fmap complexToText ts
+complexToText (Combination ts) = undefined
+
+
+type Executable = StringComplex
+type Args       = [StringComplex]
+
+type Condition = (Int -> IO Bool)
+data Task = Task Condition Task (Maybe Task) | PCall Executable Args
+
+displayTask :: Task -> T.Text
+displayTask (Task c t n) = T.concat ["c->", displayTask t, "=>", case n of 
+  Just x -> displayTask x 
+  Nothing -> ""
+  ]
+displayTask (PCall e a) = T.concat ["`", complexToText e, " [", T.unwords (fmap complexToText a), "]`"]
 
 data Direction = Up | Down | DRight | DLeft
     deriving (Show,Eq)
@@ -116,6 +157,7 @@ data ShellConfig = ShellConfig
   , binds     :: [(KeyEvent, Action)]
   , lastEvent :: KeyEvent
   , trigger   :: KeyEvent             -- this should never be overriden globally, locally it should be overwritten with the keyevent trigger (example at ^L handling)
+  , jobManager:: JobMgr
   }
 
 data State = InputOutput

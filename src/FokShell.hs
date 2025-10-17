@@ -74,7 +74,7 @@ parseEvent (ShellProcess conf state) key = do
         DLeft   -> moveCursor' conf CLeft  1 $> ShellProcess (conf {cursorLoc = min (cursorLoc conf + 1) (T.length $ input conf)}) state
         DRight  -> moveCursor' conf CRight 1 $> ShellProcess (conf {cursorLoc = max (cursorLoc conf - 1) 0}) state
         _       -> undefined
-    (KeyModifiers 0, Enter) -> putStrLn "" >> handleJob (ShellProcess conf state)
+    (KeyModifiers 0, Enter) -> putStrLn "" >> handleJob (ShellProcess conf state) <* displayPrompt (prompt conf)
     (KeyModifiers 0, Backspace) -> moveCursor' conf CLeft 1 >> redrawFromCursor nconf $> ShellProcess nconf state
       where
         loc = cursorLoc conf 

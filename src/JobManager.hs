@@ -6,8 +6,13 @@ import ExposedTypes
 import Control.Applicative
 import Data.Maybe (fromMaybe)
 import Data.Char (isSpace)
+import Data.Functor
 import Debug.Trace (trace, traceShow)
 import Control.Arrow (Arrow(second))
+import System.Process (CreateProcess(std_out, std_in, std_err), createProcess, proc, StdStream (CreatePipe), getPid, waitForProcess)
+import GHC.IO.Exception (ExitCode(ExitSuccess))
+
+--import System.Process (CreateProcess (std_out))
 
 -- implementing Call:
 -- create a function: call :: T.Text (prog) -> [T.Text] (args) -> PID 
@@ -17,21 +22,63 @@ import Control.Arrow (Arrow(second))
 
 handleJob :: ShellProcess -> IO ShellProcess
 handleJob (ShellProcess conf state) = do
-  putStrLn $ "Job Manager handling: " ++ T.unpack (input conf)
-  
-  --print $ runParser parseExpr $ input conf
+  --putStrLn $ "Job Manager handling: " ++ T.unpack (input conf)
+  let task = mkTask $ T.strip $ input conf
 
-  --let string = stringify unodes
-  --print string
   
+  --(Just stdin, Just std_out, Just stderr, proc_handle) <- createProcess (proc "sudo" ["-iu"]) { std_out = CreatePipe, std_in = CreatePipe, std_err = CreatePipe }
+
+  case task of
+    -- overriding input here
+    Just t  -> print (displayTask t) >> spawnJob conf { input="" } (mkJob t) >>= \x -> pure $ ShellProcess x state
+    Nothing -> pure $ ShellProcess conf state
+
   --evaluateNodes (ShellProcess conf state) unodes
-  pure (ShellProcess conf state)
+  --pure (ShellProcess conf state)
 
 
-data StringComplex = Basic T.Text | Variant [StringComplex] | Combination [StringComplex]
-  deriving (Show,Eq)
-type Executable = StringComplex
-type Args       = [StringComplex]
+spawnJob :: ShellConfig -> Job -> IO ShellConfig
+spawnJob conf j = do
+  case task j of
+    Task c b n -> do
+      execute <- c $ exitCodeToInt $ last_ec j
+      evaluatedConf <- if execute then spawnJob conf $ mkJob b else undefined
+      case n of 
+        Just n2 -> spawnJob evaluatedConf $ mkJob n2
+        Nothing -> pure evaluatedConf
+    PCall n a  -> do
+      --if isBuiltin n then executeBuiltin n a else
+      (sin,sout,serr,ph) <- createProcess (proc (T.unpack $ complexToText n) $ fmap (T.unpack . complexToText) a)  -- Task should specify whether it's hooked (attached to initial stdin) or not (background task). So basically pipes lmao.
+      let (JobMgr jobs) = jobManager conf
+      let newjob = j {stdinj = sin, stdoutj = sout, stderrj = serr}
+
+      -- use process handle instead of pid in Job.
+      getPid ph >>= \case
+        Just p -> do 
+          exitcode <- waitForProcess ph
+          pure conf {jobManager = JobMgr $ (newjob {pid = Just p, last_ec = exitcode}):jobs}
+        Nothing -> undefined -- undefined behavior. idk what to do when process has no id
+  --(t', h) <- walkTask $ task j
+
+
+--walkTask :: Task -> IO (Task, Bool)
+--walkTask (PCall e a) = Nothing
+
+mkJob :: Task -> Job
+mkJob t = Job {
+    pid       = Nothing
+  , task      = t
+  , stdinj    = Nothing
+  , stdoutj   = Nothing
+  , stderrj   = Nothing
+  , last_ec   = ExitSuccess
+  }
+
+mkTask :: T.Text -> Maybe Task
+mkTask t = do
+  (_, n) <- runParser parseExpr t
+  Just $ taskify n
+
 
 data Node = ProgramCall Executable Args | And Node Node
   deriving (Show,Eq)
@@ -61,9 +108,15 @@ instance Monad Parser where
     a <- as
     bs a
 
+taskify :: Node -> Task
+taskify (And n1 n2) = Task (\_ -> pure True) (taskify n1) (Just $ Task (\e -> pure $ e==0) (taskify n2) Nothing)
+taskify (ProgramCall e a) = PCall e a
+taskify x = error $ "couldn't taskify: " ++ show x
 
-parseExpr :: Parser Node
-parseExpr = pcall <|> andand
+parseExpr, parseExpr' :: Parser Node
+parseExpr = andand <|> parseExpr'
+parseExpr' = pcall
+
 
 
 -- parser for classic && operator
@@ -78,7 +131,7 @@ stringblockers = blockers ++ " {,}()"
 
 
 andand :: Parser Node
-andand = And <$> (parseExpr <* ws <* stringP "&&" <* ws) <*> parseExpr
+andand = And <$> (parseExpr' <* ws <* stringP "&&" <* ws) <*> parseExpr
 
 ws :: Parser T.Text
 ws = spanP isSpace
@@ -142,66 +195,6 @@ extractUntil b = Parser f'
       | T.head t `elem` b = T.empty
       | otherwise         = T.concat [T.singleton $ T.head t, f (T.drop 1 t)]
 
-
-{-
-
-parseExpr :: Parser Node
-parseExpr = trace "called" $ eol <|> strings <|> envVars <|> variants
-
-openers = ['{', '(', '"', '$']
-openers, limited, blockers :: [Char]
-limited = openers ++ "$,})\""
-blockers = ' ':limited
-
-strings :: Parser Node
-strings = strings' <|> trace "strings" (String <$> (ws *> trace "extract" extract blockers) <*> parseExpr)
-
-strings' :: Parser Node
-strings' = trace "strings'" $ String <$> (charP '"' *> trace "extract" extract limited <* charP '"') <*> parseExpr
-
-eol :: Parser Node
-eol = Parser $ \x -> if x == T.empty || (T.head x `elem` blockers && T.head x `notElem` openers) then Just (x, EOL) else Nothing
---separator :: Parser Node
---separator = Parser $ \x -> if x /= T.empty && T.head x == ' ' then Just (T.drop 1 x, Space) else Nothing
-
-envVars :: Parser Node
-envVars = EnvVar <$> (charP '$' *> extract blockers) <*> parseExpr
-
-
-variants :: Parser Node
-variants = Variant <$> (charP '{' *> ws *> variants' <* ws <* charP '}') <*> trace "parseExpr from variants" parseExpr
-
-variants' :: Parser [Node]
-variants' = sepBy (ws *> trace "wooohoo" charP ',' <* ws) parseExpr
-
-sepBy :: Parser a
-      -> Parser b
-      -> Parser [b]
-sepBy sep element = (:) <$> element <*> many (sep *> element) <|> pure []
-
-ws :: Parser T.Text
-ws = spanP isSpace
-
-extract :: [Char] -> Parser T.Text
-extract b = Parser f'
-  where
-    f' t = trace ("extract: " ++ T.unpack t) result
-      where
-        parsed = f t
-        rest = T.takeEnd (T.length t - T.length parsed) t
-        result = if T.null parsed then Nothing else
-            Just (rest, parsed)
-    f t
-      | t == T.empty      = T.empty
-      | T.head t `elem` b = T.empty
-      | otherwise         = T.concat [T.singleton $ T.head t, f (T.drop 1 t)]
-extractChar :: Char -> [Char] -> Maybe Char
-extractChar c blockers
-  | c `elem` blockers = Nothing
-  | otherwise = Just c
-
-
--}
 
 charP :: Char -> Parser Char
 charP x = Parser f

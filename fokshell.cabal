@@ -75,6 +75,7 @@ library
                     , text
                     , path
                     , directory
+                    , process
                     , unix
                     , hostname
 
