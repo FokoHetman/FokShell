@@ -9,8 +9,10 @@ import Data.Char (isSpace)
 import Data.Functor
 import Debug.Trace (trace, traceShow)
 import Control.Arrow (Arrow(second))
-import System.Process (CreateProcess(std_out, std_in, std_err), createProcess, proc, StdStream (CreatePipe), getPid, waitForProcess)
+import System.Process (CreateProcess(std_out, std_in, std_err), createProcess, proc, StdStream (CreatePipe, UseHandle, Inherit), getPid, waitForProcess)
 import GHC.IO.Exception (ExitCode(ExitSuccess))
+
+import System.IO
 
 --import System.Process (CreateProcess (std_out))
 
@@ -30,7 +32,7 @@ handleJob (ShellProcess conf state) = do
 
   case task of
     -- overriding input here
-    Just t  -> print (displayTask t) >> spawnJob conf { input="" } (mkJob t) >>= \x -> pure $ ShellProcess x state
+    Just t  -> print (displayTask t) >> spawnJob conf { input="" } (mkJob t Terminal Terminal Terminal) >>= \x -> pure $ ShellProcess x state
     Nothing -> pure $ ShellProcess conf state
 
   --evaluateNodes (ShellProcess conf state) unodes
@@ -40,47 +42,67 @@ handleJob (ShellProcess conf state) = do
 spawnJob :: ShellConfig -> Job -> IO ShellConfig
 spawnJob conf j = do
   case task j of
-    Task c b n -> do
+    Task c b n sin sout serr -> do
       execute <- c $ exitCodeToInt $ last_ec j
-      evaluatedConf <- if execute then spawnJob conf $ mkJob b else undefined
+      evaluatedConf <- if execute then spawnJob conf $ mkJob b sin sout serr else undefined
       case n of 
-        Just n2 -> spawnJob evaluatedConf $ mkJob n2
+        Just n2 -> spawnJob evaluatedConf $ mkJob n2 sin sout serr -- or Terminal Terminal, idfk
         Nothing -> pure evaluatedConf
     PCall n a  -> do
       --if isBuiltin n then executeBuiltin n a else
-      (sin,sout,serr,ph) <- createProcess (proc (T.unpack $ complexToText n) $ fmap (T.unpack . complexToText) a)  -- Task should specify whether it's hooked (attached to initial stdin) or not (background task). So basically pipes lmao.
+      stdoutr <- case pipeOut j of
+        Terminal -> pure Inherit
+        File f   -> openFile (T.unpack f) WriteMode >>= \x -> pure $ UseHandle x
+      stdinr <- case pipeIn j of
+        Terminal -> pure Inherit
+        File f   -> openFile (T.unpack f) WriteMode >>= \x -> pure $ UseHandle x
+      stderrr <- case pipeErr j of
+        Terminal -> pure Inherit
+        File f   -> openFile (T.unpack f) WriteMode >>= \x -> pure $ UseHandle x
+
+      (s_in,sout,serr,ph) <- createProcess (proc (T.unpack $ complexToText n) $ fmap (T.unpack . complexToText) a)  -- Task should specify whether it's hooked (attached to initial stdin) or not (background task). So basically pipes lmao.
+          {std_out = stdoutr, std_in = stdinr, std_err = stderrr}
       let (JobMgr jobs) = jobManager conf
-      let newjob = j {stdinj = sin, stdoutj = sout, stderrj = serr}
+      let newjob = j {stdinj = s_in, stdoutj = sout, stderrj = serr}
 
       -- use process handle instead of pid in Job.
       getPid ph >>= \case
-        Just p -> do 
+        Just p -> do
           exitcode <- waitForProcess ph
           pure conf {jobManager = JobMgr $ (newjob {pid = Just p, last_ec = exitcode}):jobs}
         Nothing -> undefined -- undefined behavior. idk what to do when process has no id
   --(t', h) <- walkTask $ task j
+  where
+    getHandle :: (Job -> PipeType) -> IO StdStream
+    getHandle fun = case fun j of
+        Terminal -> pure Inherit
+        File f   -> openFile (T.unpack f) WriteMode >>= \x -> pure $ UseHandle x
 
 
 --walkTask :: Task -> IO (Task, Bool)
 --walkTask (PCall e a) = Nothing
 
-mkJob :: Task -> Job
-mkJob t = Job {
+mkJob :: Task -> PipeType -> PipeType -> PipeType -> Job
+mkJob t i o e = Job {
     pid       = Nothing
   , task      = t
   , stdinj    = Nothing
   , stdoutj   = Nothing
   , stderrj   = Nothing
   , last_ec   = ExitSuccess
+
+  , pipeIn    = i
+  , pipeOut   = o
+  , pipeErr   = e
   }
 
 mkTask :: T.Text -> Maybe Task
 mkTask t = do
   (_, n) <- runParser parseExpr t
-  Just $ taskify n
+  taskify n
 
 
-data Node = ProgramCall Executable Args | And Node Node
+data Node = ProgramCall Executable Args | And Node Node | Pipe Node Node
   deriving (Show,Eq)
 
 newtype Parser a = Parser {runParser :: T.Text -> Maybe (T.Text, a)}
@@ -108,20 +130,27 @@ instance Monad Parser where
     a <- as
     bs a
 
-taskify :: Node -> Task
-taskify (And n1 n2) = Task (\_ -> pure True) (taskify n1) (Just $ Task (\e -> pure $ e==0) (taskify n2) Nothing)
-taskify (ProgramCall e a) = PCall e a
+-- use only in situations where it's certain node *should* be text
+nodeAsText :: Node -> Maybe T.Text
+nodeAsText (ProgramCall e _) = Just $ complexToText e
+nodeAsText _ = Nothing
+
+
+taskify :: Node -> Maybe Task
+taskify (And n1 n2) = (\x y -> Task (\_ -> pure True) x (Just $ Task (\e -> pure $ e==0) y Nothing Terminal Terminal Terminal) Terminal Terminal Terminal) <$> taskify n1 <*> taskify n2
+taskify (Pipe n1 n2) = (\x y -> Task {condition = \_ -> pure True {-probably check if n2 is a file and exists-}, body = x, next = Nothing, stdinT = Terminal, stdoutT = File y, stderrT = Terminal}) <$> taskify n1 <*> nodeAsText n2
+taskify (ProgramCall e a) = Just $ PCall e a
 taskify x = error $ "couldn't taskify: " ++ show x
 
-parseExpr, parseExpr' :: Parser Node
-parseExpr = andand <|> parseExpr'
+parseExpr, parseExpr', parseExpr'' :: Parser Node
+parseExpr = andand <|> pipe <|> parseExpr'
 parseExpr' = pcall
-
+parseExpr'' = pcall
 
 
 -- parser for classic && operator
 
--- blockers are chars that symbolize a beggining of a new NODE, such as AND (`&&`). docs/parsing:1.2 (todo)
+-- blockers are chars that symbolize a beggining of a new NODE, such as AND (`&&`). docs/parsing:1.2
 blockers :: String
 blockers = " $&><|"
 
@@ -129,6 +158,8 @@ blockers = " $&><|"
 stringblockers :: String
 stringblockers = blockers ++ " {,}()"
 
+pipe :: Parser Node
+pipe = Pipe <$> (parseExpr'' <* ws <* charP '>' <* ws) <*> parseExpr
 
 andand :: Parser Node
 andand = And <$> (parseExpr' <* ws <* stringP "&&" <* ws) <*> parseExpr

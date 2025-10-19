@@ -16,4 +16,6 @@ ProgramCall(StringComplex (String "echo"), \[StringComplex (String "hello"), Str
 * NodeBlockers - they block parsing of a node, as another node is found, ex: `&` in `echo hi && echo hello`
 * StringBlockers - they block parsing of specific blocks within string (refer to program calls), ex: `,` in `echo {hi,hello}.hs`
 
+## 1.3 bash-isms
 
+todo

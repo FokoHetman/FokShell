@@ -41,6 +41,10 @@ data Job = Job {
   , stderrj :: Maybe Handle
   , stdinj  :: Maybe Handle
   , last_ec :: ExitCode
+
+  , pipeOut :: PipeType
+  , pipeIn  :: PipeType
+  , pipeErr :: PipeType
 }
 exitCodeToInt :: ExitCode -> Int
 exitCodeToInt ExitSuccess     = 0
@@ -62,13 +66,22 @@ complexToText (Combination ts) = undefined
 type Executable = StringComplex
 type Args       = [StringComplex]
 
+data PipeType = File T.Text | Terminal
+  deriving (Show, Eq)
 type Condition = (Int -> IO Bool)
-data Task = Task Condition Task (Maybe Task) | PCall Executable Args
+data Task = Task {condition :: Condition, body :: Task, next :: Maybe Task, stdinT :: PipeType, stdoutT :: PipeType, stderrT :: PipeType} | PCall Executable Args
+
+instance Show Task where
+  show (PCall e a) = "`" ++ T.unpack (complexToText e) ++ " [" ++ (T.unpack . T.unwords) (fmap complexToText a) ++ "]`"
+  show (Task _ t n sin sout serr) = "{" ++ show sin ++ "}c -> " ++ show t ++ case n of
+    Just x -> "=>" ++ show x
+    Nothing -> ""
+    ++ "-->" ++ show sout
 
 displayTask :: Task -> T.Text
-displayTask (Task c t n) = T.concat ["c->", displayTask t, "=>", case n of 
-  Just x -> displayTask x 
-  Nothing -> ""
+displayTask (Task c t n sin out serr) = T.concat ["{", T.pack $ show sin, "}c->", displayTask t, case n of 
+  Just x -> T.concat ["=>", displayTask x]
+  Nothing -> "", "-->", T.pack $ show out
   ]
 displayTask (PCall e a) = T.concat ["`", complexToText e, " [", T.unwords (fmap complexToText a), "]`"]
 
