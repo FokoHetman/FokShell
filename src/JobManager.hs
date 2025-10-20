@@ -32,7 +32,7 @@ handleJob (ShellProcess conf state) = do
 
   case task of
     -- overriding input here
-    Just t  -> print (displayTask t) >> spawnJob conf { input="" } (mkJob t Terminal Terminal Terminal) >>= \x -> pure $ ShellProcess x state
+    Just t  -> displayTask t >>= print >> spawnJob conf { input="", cursorLoc=0 } (mkJob t Terminal Terminal Terminal) >>= \x -> pure $ ShellProcess x state
     Nothing -> pure $ ShellProcess conf state
 
   --evaluateNodes (ShellProcess conf state) unodes
@@ -50,17 +50,13 @@ spawnJob conf j = do
         Nothing -> pure evaluatedConf
     PCall n a  -> do
       --if isBuiltin n then executeBuiltin n a else
-      stdoutr <- case pipeOut j of
-        Terminal -> pure Inherit
-        File f   -> openFile (T.unpack f) WriteMode >>= \x -> pure $ UseHandle x
-      stdinr <- case pipeIn j of
-        Terminal -> pure Inherit
-        File f   -> openFile (T.unpack f) WriteMode >>= \x -> pure $ UseHandle x
-      stderrr <- case pipeErr j of
-        Terminal -> pure Inherit
-        File f   -> openFile (T.unpack f) WriteMode >>= \x -> pure $ UseHandle x
+      stdoutr <- getHandle pipeOut
+      stdinr  <- getHandle pipeIn
+      stderrr <- getHandle pipeErr
 
-      (s_in,sout,serr,ph) <- createProcess (proc (T.unpack $ complexToText n) $ fmap (T.unpack . complexToText) a)  -- Task should specify whether it's hooked (attached to initial stdin) or not (background task). So basically pipes lmao.
+      pname <- complexToText n
+      args  <- mapM complexToText a
+      (s_in,sout,serr,ph) <- createProcess (proc (T.unpack pname) $ fmap T.unpack args)
           {std_out = stdoutr, std_in = stdinr, std_err = stderrr}
       let (JobMgr jobs) = jobManager conf
       let newjob = j {stdinj = s_in, stdoutj = sout, stderrj = serr}
@@ -76,7 +72,7 @@ spawnJob conf j = do
     getHandle :: (Job -> PipeType) -> IO StdStream
     getHandle fun = case fun j of
         Terminal -> pure Inherit
-        File f   -> openFile (T.unpack f) WriteMode >>= \x -> pure $ UseHandle x
+        File f m -> f >>= \uf -> openFile (T.unpack uf) m >>= \x -> pure $ UseHandle x
 
 
 --walkTask :: Task -> IO (Task, Bool)
@@ -102,7 +98,9 @@ mkTask t = do
   taskify n
 
 
-data Node = ProgramCall Executable Args | And Node Node | Pipe Node Node
+data PipeSyntax = {- > -} Write | {- >> -} Append | {- 2> -} WriteErr | {- 2>> -} AppendErr
+  deriving (Show,Eq)
+data Node = ProgramCall Executable Args | And Node Node | Pipe PipeSyntax Node Node
   deriving (Show,Eq)
 
 newtype Parser a = Parser {runParser :: T.Text -> Maybe (T.Text, a)}
@@ -131,14 +129,24 @@ instance Monad Parser where
     bs a
 
 -- use only in situations where it's certain node *should* be text
-nodeAsText :: Node -> Maybe T.Text
+nodeAsText :: Node -> Maybe (IO T.Text)
 nodeAsText (ProgramCall e _) = Just $ complexToText e
 nodeAsText _ = Nothing
 
 
 taskify :: Node -> Maybe Task
 taskify (And n1 n2) = (\x y -> Task (\_ -> pure True) x (Just $ Task (\e -> pure $ e==0) y Nothing Terminal Terminal Terminal) Terminal Terminal Terminal) <$> taskify n1 <*> taskify n2
-taskify (Pipe n1 n2) = (\x y -> Task {condition = \_ -> pure True {-probably check if n2 is a file and exists-}, body = x, next = Nothing, stdinT = Terminal, stdoutT = File y, stderrT = Terminal}) <$> taskify n1 <*> nodeAsText n2
+taskify (Pipe ps n1 n2) = (\x y -> Task {condition = \_ -> pure True {-probably check if n2 is a file and exists-}, body = x, next = Nothing 
+  , stdinT = Terminal
+  , stdoutT = case ps of 
+    Write     -> File y WriteMode
+    Append    -> File y AppendMode
+    _         -> Terminal
+  , stderrT = case ps of 
+    WriteErr  -> File y WriteMode
+    AppendErr -> File y AppendMode
+    _      -> Terminal}
+  ) <$> taskify n1 <*> nodeAsText n2
 taskify (ProgramCall e a) = Just $ PCall e a
 taskify x = error $ "couldn't taskify: " ++ show x
 
@@ -152,14 +160,20 @@ parseExpr'' = pcall
 
 -- blockers are chars that symbolize a beggining of a new NODE, such as AND (`&&`). docs/parsing:1.2
 blockers :: String
-blockers = " $&><|"
+blockers = " &2><|"
 
 -- blockers that also block stringcomplex parsing
 stringblockers :: String
-stringblockers = blockers ++ " {,}()"
+stringblockers = blockers ++ " ${,}()"
+
 
 pipe :: Parser Node
-pipe = Pipe <$> (parseExpr'' <* ws <* charP '>' <* ws) <*> parseExpr
+pipe = f Write (charP '>')
+      <|> f Append (stringP ">>")
+      <|> f WriteErr (stringP "2>")
+      <|> f AppendErr (stringP "2>>")
+  where
+    f sx ssx = Pipe sx <$> (parseExpr'' <* ws <* ssx <* ws) <*> parseExpr
 
 andand :: Parser Node
 andand = And <$> (parseExpr' <* ws <* stringP "&&" <* ws) <*> parseExpr
@@ -201,9 +215,11 @@ capStr t = f (runParser stringify t)
         y             -> Combination [x, y]
       Nothing -> error "capStr died lmao"
 stringify :: Parser StringComplex
-stringify = basic <|> variant
+stringify = basic <|> variant <|> envvar
 
 
+envvar :: Parser StringComplex
+envvar = EnvVar <$> (ws *> charP '$' *> extractUntil stringblockers <* ws)
 
 basic :: Parser StringComplex
 basic = Basic <$> extractUntil stringblockers

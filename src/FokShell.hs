@@ -92,6 +92,7 @@ parseEvent (ShellProcess conf state) key = do
     (KeyModifiers 0, Character rawKey) -> do
       putStr $ T.unpack rawKey
       hFlush stdout
+      redrawFromCursor conf
       pure $ ShellProcess (addToInput conf rawKey) state
     _ -> do 
       let bind = filter (\x -> fst x == key) $ binds conf
@@ -101,4 +102,9 @@ parseEvent (ShellProcess conf state) key = do
     unwrapBind [x] defval = snd x defval
     unwrapBind [] defval = pure defval
     unwrapBind _ _ = undefined
-    addToInput c t = conf {input = T.concat [input c, t]}
+    addToInput c t = c {input = T.concat [left, t, right]}
+      where
+        loc = cursorLoc c 
+        inp = input c
+        right = T.reverse $ T.take loc $ T.reverse inp
+        left  = T.take (T.length inp - T.length right) inp

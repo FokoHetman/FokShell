@@ -8,10 +8,10 @@ import qualified Data.Bits as B
 import System.Exit (exitSuccess, ExitCode (ExitSuccess, ExitFailure))
 import Control.Monad (when)
 import System.Directory (getCurrentDirectory, getHomeDirectory)
-import System.Posix (getEffectiveUserName)
+import System.Posix (getEffectiveUserName, getEnv)
 
 import Data.Functor
-import System.IO (hFlush, stdout)
+import System.IO (hFlush, stdout, IOMode)
 
 import Network.HostName
 
@@ -54,11 +54,14 @@ exitCodeToInt (ExitFailure c) = c
 newtype JobMgr = JobMgr [Job]
 
 
-data StringComplex = Basic T.Text | Variant [StringComplex] | Combination [StringComplex]
+data StringComplex = Basic T.Text | EnvVar T.Text | Variant [StringComplex] | Combination [StringComplex]
   deriving (Show,Eq)
 
-complexToText :: StringComplex -> T.Text
-complexToText (Basic t) = t
+complexToText :: StringComplex -> IO T.Text
+complexToText (Basic t) = pure t
+complexToText (EnvVar t) = getEnv (T.unpack t) >>= \case
+                            Just x -> pure $ T.pack x
+                            Nothing -> pure  T.empty
 complexToText (Variant ts) = undefined--T.unwords $ fmap complexToText ts
 complexToText (Combination ts) = undefined
 
@@ -66,24 +69,35 @@ complexToText (Combination ts) = undefined
 type Executable = StringComplex
 type Args       = [StringComplex]
 
-data PipeType = File T.Text | Terminal
-  deriving (Show, Eq)
+type FileName = (IO T.Text)
+
+data PipeType = File FileName IOMode | Terminal
+
+displayPipeType :: PipeType -> IO T.Text
+displayPipeType Terminal = pure "Terminal"
+displayPipeType (File fname mode) = fname >>= \x -> pure $ T.concat [x, "[", T.pack $ show mode, "]"]
+
+displayHide :: PipeType -> T.Text
+displayHide Terminal = "Terminal"
+displayHide (File _ mode) = T.concat ["File ? ", T.pack $ show mode]
+
 type Condition = (Int -> IO Bool)
 data Task = Task {condition :: Condition, body :: Task, next :: Maybe Task, stdinT :: PipeType, stdoutT :: PipeType, stderrT :: PipeType} | PCall Executable Args
 
 instance Show Task where
-  show (PCall e a) = "`" ++ T.unpack (complexToText e) ++ " [" ++ (T.unpack . T.unwords) (fmap complexToText a) ++ "]`"
-  show (Task _ t n sin sout serr) = "{" ++ show sin ++ "}c -> " ++ show t ++ case n of
+  show (PCall _ a) = "`" ++ "hidden behind IO"{-T.unpack (complexToText e)-} ++ " [" ++ (T.unpack . T.unwords) (fmap (const "hidden behind IO") a) ++ "]`"
+  show (Task _ t n sin sout serr) = "{" ++ T.unpack (displayHide sin) ++ "}c -> " ++ show t ++ case n of
     Just x -> "=>" ++ show x
     Nothing -> ""
-    ++ "-->" ++ show sout
+    ++ "-->" ++ T.unpack (displayHide sout)
 
-displayTask :: Task -> T.Text
-displayTask (Task c t n sin out serr) = T.concat ["{", T.pack $ show sin, "}c->", displayTask t, case n of 
-  Just x -> T.concat ["=>", displayTask x]
-  Nothing -> "", "-->", T.pack $ show out
+displayTask :: Task -> IO T.Text
+displayTask (Task c t n sin out serr) = case n of 
+    Just x -> displayTask x >>= \y -> pure $ T.concat ["=>", y]
+    Nothing -> pure "" 
+  >>= \x -> displayTask t >>= \t -> displayPipeType sin >>= \sin -> displayPipeType out >>= \sout -> pure $ T.concat ["{", sin, "}c->", t, x, "-->", sout
   ]
-displayTask (PCall e a) = T.concat ["`", complexToText e, " [", T.unwords (fmap complexToText a), "]`"]
+displayTask (PCall e a) = mapM complexToText a >>= \as -> complexToText e >>= \es -> pure $ T.concat ["`", es, " [", T.unwords as, "]`"]
 
 data Direction = Up | Down | DRight | DLeft
     deriving (Show,Eq)
