@@ -6,9 +6,11 @@ import qualified Data.Bits as B
 
 
 import System.Exit (exitSuccess, ExitCode (ExitSuccess, ExitFailure))
-import Control.Monad (when)
+import Control.Monad (when, unless)
 import System.Directory (getCurrentDirectory, getHomeDirectory)
-import System.Posix (getEffectiveUserName, getEnv)
+import System.Posix (getEffectiveUserName, getEnv, fileExist, createFile)
+
+import System.FilePath ((</>))
 
 import Data.Functor
 import System.IO (hFlush, stdout, IOMode)
@@ -17,6 +19,7 @@ import Network.HostName
 
 import GHC.IO.Handle
 import System.Process (Pid)
+import Debug.Trace (trace)
 
 
 class Def a where
@@ -30,7 +33,47 @@ eputStrf t = t >>= \x -> putStr (T.unpack x) <> hFlush stdout
 putStrf :: T.Text -> IO ()
 putStrf t = putStr (T.unpack t) <> hFlush stdout
 
+-- COLOR SCHEME DATA, move to separate file
 
+data RGB = RGB Int Int Int
+type Color = IO RGB
+
+instance Show RGB where
+  show (RGB r g b) = show r ++ ";" ++ show g ++ ";" ++ show b
+
+data ColorScheme = ColorScheme {
+  
+  -- user-friendly colors
+    color0      :: Color
+  , color1      :: Color
+  , color2      :: Color
+  , color3      :: Color
+  
+  , textColor   :: Color
+  , shadowText  :: Color
+  , errorColor  :: Color
+  , warningColor:: Color
+  -- I don't know what other colors are there
+}
+
+generateColorShortcuts :: ColorScheme -> [(T.Text, IO T.Text)]
+generateColorShortcuts c = [
+    ("%c0", wrap $ color0 c)
+  , ("%c1", wrap $ color1 c)
+  , ("%c2", wrap $ color2 c)
+  , ("%c3", wrap $ color3 c)
+  , ("%t", wrap $ textColor c)
+  , ("%s", wrap $ shadowText c)
+  , ("%e", wrap $ errorColor c)
+  , ("%w", wrap $ warningColor c)
+  ]
+  where
+    wrap = (<&> \x -> T.concat ["\ESC[38;2;", T.pack $ show x, "m"])
+
+instance Def ColorScheme where
+  def = ColorScheme {
+    -- todo
+  }
 
 
 
@@ -162,9 +205,8 @@ instance Def ShellHooks where
     , clearHook = defaultClearHook
     }
 
-type PromptText = T.Text
-data Swallow = Never | Swallowed PromptText
-data Prompt  = SingleLine PromptText Swallow | MultiLine PromptText Swallow
+data Swallow = Never | Swallowed (IO T.Text)
+data Prompt  = SingleLine (IO T.Text) Swallow | MultiLine (IO [T.Text]) Swallow
 
 
 getFormattedDirectory :: IO T.Text
@@ -174,17 +216,22 @@ getFormattedDirectory = do
   pure $ T.replace (T.pack home) "~" (T.pack dir)
 
 
+-- TODO: extract to a separate file
 data ShellConfig = ShellConfig
-  { hooks     :: ShellHooks
-  , prompt    :: Prompt
+  { hooks       :: ShellHooks
+  , prompt      :: Prompt
   
-  , cursorLoc :: Int                  -- from the right, surprisingly
---, cursor    :: CursorConfig
-  , input     :: T.Text
-  , binds     :: [(KeyEvent, Action)]
-  , lastEvent :: KeyEvent
-  , trigger   :: KeyEvent             -- this should never be overriden globally, locally it should be overwritten with the keyevent trigger (example at ^L handling)
-  , jobManager:: JobMgr
+  , colorScheme :: ColorScheme
+
+  , cursorLoc   :: Int                  -- from the right, surprisingly
+--, cursor      :: CursorConfig
+  , input       :: T.Text
+  , binds       :: [(KeyEvent, Action)]
+  , lastEvent   :: KeyEvent
+  , trigger     :: KeyEvent             -- this should never be overriden globally, locally it should be overwritten with the keyevent trigger (example at ^L handling)
+  , jobManager  :: JobMgr
+  , history     :: [T.Text]
+  , getHistory  :: IO [T.Text]
   }
 
 data State = InputOutput
@@ -195,32 +242,49 @@ data ShellProcess = ShellProcess ShellConfig State
 instance Def ShellConfig where
   def = ShellConfig
     { hooks = def
-    , prompt = SingleLine "%d > " Never
+    , prompt = SingleLine (getFormattedDirectory <&> (<> " > ")) Never
     , input = ""
-    
+
     , cursorLoc = 0
 
     , binds = def
     , lastEvent = (KeyModifiers 0, Escape)
     , trigger = (KeyModifiers 0, Escape)
+    , jobManager = JobMgr []
+    , history = []
+    , getHistory = readHistory $ getHomeDirectory <&> (</> ".fok_history")
     }
 
+readHistory :: IO FilePath -> IO [T.Text]
+readHistory f2 = f2 >>= (\f -> fileExist f >>= \x -> unless x (void $ trace ("creating a history file: `" ++ f ++ "`") $ createFile f 770) >> readFile f <&> (T.split (=='\n') . T.pack))
+
+{- better solution found: IO T.Text
 shortcuts :: [(T.Text, IO T.Text)]
 shortcuts = [("%u", T.pack <$> getEffectiveUserName), ("%d", getFormattedDirectory), ("%h", T.pack <$> getHostName)]
+-}
 
-replaceShortcuts :: [(T.Text, IO T.Text)] -> IO T.Text -> IO T.Text
-replaceShortcuts (x:xs) text = do
-  t <- text
-  replaceShortcuts xs ((\y -> T.replace (fst x) y t) <$> snd x)
-replaceShortcuts [] text = text
+replaceShortcuts :: [(T.Text, IO T.Text)] -> T.Text -> IO T.Text
+replaceShortcuts (x:xs) t = snd x >>= \y -> replaceShortcuts xs (T.replace (fst x) y t)
+replaceShortcuts [] text = pure text
+
+clearLines :: Direction -> Int -> IO ()
+clearLines _ 0 = putStr "\ESC[2K\r"
+clearLines d i = putStr "\ESC[2K\r" >> moveCursor d 1 >> clearLines d (i-1)
+
+swallowPrompt :: Int -> T.Text -> Prompt -> IO ()
+swallowPrompt c input = \case
+  SingleLine _ (Swallowed sw) -> putStr "\ESC[2K\r" >> clearLines Up 0 >> (sw >>= putStrf) >> putStrf (T.strip input) >> moveCursor DLeft c
+  MultiLine  t2 (Swallowed sw) -> t2 >>= \t -> clearLines Up (length t - 1) >> (sw >>= putStrf) >> putStrf (T.strip input) >> moveCursor DLeft c
+  SingleLine _ Never -> pure ()
+  MultiLine _ Never -> pure ()
+
 
 displayPrompt :: Prompt -> IO ()
 displayPrompt = \case 
-  SingleLine text _ -> eputStrf <$> formatted $ pure text
-  MultiLine text _  -> eputStrf <$> formatted $ pure text
-  where
-    formatted :: IO T.Text -> IO T.Text
-    formatted = replaceShortcuts shortcuts
+  SingleLine text _ -> eputStrf text
+  MultiLine text _  -> eputStrf $ text <&> T.intercalate "\n" 
+
+
 
 redrawFromCursor :: ShellConfig -> IO ()
 redrawFromCursor c = putStrf $ T.concat [erase, lefts, cursorCode]
@@ -248,16 +312,19 @@ instance Def [(KeyEvent, Action)] where
     ]
 
 
-data CursorDirection = CLeft | CRight
-
-moveCursor :: CursorDirection -> Int -> IO ()
+moveCursor :: Direction -> Int -> IO ()
 moveCursor _ 0 = pure ()
-moveCursor CLeft i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "D"
-moveCursor CRight i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "C"
+moveCursor DLeft i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "D"
+moveCursor DRight i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "C"
+moveCursor Up i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "A"
+moveCursor Down i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "B"
 
-moveCursor':: ShellConfig -> CursorDirection -> Int -> IO ()
-moveCursor' c CLeft  i = when (T.length (input c) > cursorLoc c) (moveCursor CLeft i)
-moveCursor' c CRight i = when (cursorLoc c > 0)  (moveCursor CRight i)
+
+
+moveCursor':: ShellConfig -> Direction -> Int -> IO ()
+moveCursor' c DLeft  i = when (T.length (input c) > cursorLoc c) (moveCursor DLeft i)
+moveCursor' c DRight i = when (cursorLoc c > 0)  (moveCursor DRight i)
+moveCursor' _ _ _ = error "unsupported '-wrapped direction"
 
 
 updateWithKey :: KeyEvent -> ShellProcess -> ShellProcess

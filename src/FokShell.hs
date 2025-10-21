@@ -40,8 +40,9 @@ fokshell :: ShellConfig -> IO ()
 fokshell config = do
   hSetEcho stdin False
   hSetBuffering stdin NoBuffering
-
-  let proc = ShellProcess config InputOutput
+  
+  extractedHistory <- getHistory config
+  let proc = ShellProcess config {history = extractedHistory} InputOutput
   doStart <- startHook (hooks config) proc
   unless doStart exitSuccess
 
@@ -71,11 +72,11 @@ parseEvent (ShellProcess conf state) key = do
   out <- case key of
   -- KEYS
     (KeyModifiers 0, Arrow d) -> case d of
-        DLeft   -> moveCursor' conf CLeft  1 $> ShellProcess (conf {cursorLoc = min (cursorLoc conf + 1) (T.length $ input conf)}) state
-        DRight  -> moveCursor' conf CRight 1 $> ShellProcess (conf {cursorLoc = max (cursorLoc conf - 1) 0}) state
+        DLeft   -> moveCursor' conf DLeft  1 $> ShellProcess (conf {cursorLoc = min (cursorLoc conf + 1) (T.length $ input conf)}) state
+        DRight  -> moveCursor' conf DRight 1 $> ShellProcess (conf {cursorLoc = max (cursorLoc conf - 1) 0}) state
         _       -> undefined
-    (KeyModifiers 0, Enter) -> putStrLn "" >> handleJob (ShellProcess conf state) <* displayPrompt (prompt conf)
-    (KeyModifiers 0, Backspace) -> moveCursor' conf CLeft 1 >> redrawFromCursor nconf $> ShellProcess nconf state
+    (KeyModifiers 0, Enter) -> swallowPrompt (cursorLoc conf) (input conf) (prompt conf) >> putStrLn "" >> handleJob (ShellProcess conf {history = history conf ++ [T.strip (input conf)]} state) <* displayPrompt (prompt conf)
+    (KeyModifiers 0, Backspace) -> moveCursor' conf DLeft 1 >> redrawFromCursor nconf $> ShellProcess nconf state
       where
         loc = cursorLoc conf 
         inp = input conf
