@@ -8,7 +8,7 @@ import qualified Data.Bits as B
 import System.Exit (exitSuccess, ExitCode (ExitSuccess, ExitFailure))
 import Control.Monad (when, unless)
 import System.Directory (getCurrentDirectory, getHomeDirectory)
-import System.Posix (getEffectiveUserName, getEnv, fileExist, createFile)
+import System.Posix (getEffectiveUserName, getEnv, fileExist, createFile, ownerWriteMode, setFileMode, ownerReadMode)
 
 import System.FilePath ((</>))
 
@@ -20,11 +20,11 @@ import Network.HostName
 import GHC.IO.Handle
 import System.Process (Pid)
 import Debug.Trace (trace)
+import Control.Arrow (Arrow(second, first))
+import Data.Bifunctor (Bifunctor(bimap))
 
-
-class Def a where
-  def :: a
-
+import Lib.Primitive
+import Lib.ColorScheme
 
 -- DISPLAY FUNCTIONS
 eputStrf :: IO T.Text -> IO ()
@@ -35,45 +35,7 @@ putStrf t = putStr (T.unpack t) <> hFlush stdout
 
 -- COLOR SCHEME DATA, move to separate file
 
-data RGB = RGB Int Int Int
-type Color = IO RGB
 
-instance Show RGB where
-  show (RGB r g b) = show r ++ ";" ++ show g ++ ";" ++ show b
-
-data ColorScheme = ColorScheme {
-  
-  -- user-friendly colors
-    color0      :: Color
-  , color1      :: Color
-  , color2      :: Color
-  , color3      :: Color
-  
-  , textColor   :: Color
-  , shadowText  :: Color
-  , errorColor  :: Color
-  , warningColor:: Color
-  -- I don't know what other colors are there
-}
-
-generateColorShortcuts :: ColorScheme -> [(T.Text, IO T.Text)]
-generateColorShortcuts c = [
-    ("%c0", wrap $ color0 c)
-  , ("%c1", wrap $ color1 c)
-  , ("%c2", wrap $ color2 c)
-  , ("%c3", wrap $ color3 c)
-  , ("%t", wrap $ textColor c)
-  , ("%s", wrap $ shadowText c)
-  , ("%e", wrap $ errorColor c)
-  , ("%w", wrap $ warningColor c)
-  ]
-  where
-    wrap = (<&> \x -> T.concat ["\ESC[38;2;", T.pack $ show x, "m"])
-
-instance Def ColorScheme where
-  def = ColorScheme {
-    -- todo
-  }
 
 
 
@@ -182,8 +144,11 @@ defaultHaltHook _ = do
   putStrLn "^C"
   pure True
 
+defaultHistoryFile :: IO FilePath
+defaultHistoryFile = getHomeDirectory <&> (</> ".fok_history")
 defaultExitHook :: Hook
-defaultExitHook _ = do
+defaultExitHook (ShellProcess c _) = do
+  defaultHistoryFile >>= \x -> writeFile x $ T.unpack $ T.intercalate "\n" $ history c
   putStrLn "\nexit"
   pure True
 
@@ -231,6 +196,7 @@ data ShellConfig = ShellConfig
   , trigger     :: KeyEvent             -- this should never be overriden globally, locally it should be overwritten with the keyevent trigger (example at ^L handling)
   , jobManager  :: JobMgr
   , history     :: [T.Text]
+  , historyIndex:: Maybe (Int, T.Text)
   , getHistory  :: IO [T.Text]
   }
 
@@ -247,16 +213,18 @@ instance Def ShellConfig where
 
     , cursorLoc = 0
 
+    , colorScheme = def
     , binds = def
     , lastEvent = (KeyModifiers 0, Escape)
     , trigger = (KeyModifiers 0, Escape)
     , jobManager = JobMgr []
     , history = []
-    , getHistory = readHistory $ getHomeDirectory <&> (</> ".fok_history")
+    , historyIndex = Nothing
+    , getHistory = readHistory defaultHistoryFile
     }
 
 readHistory :: IO FilePath -> IO [T.Text]
-readHistory f2 = f2 >>= (\f -> fileExist f >>= \x -> unless x (void $ trace ("creating a history file: `" ++ f ++ "`") $ createFile f 770) >> readFile f <&> (T.split (=='\n') . T.pack))
+readHistory f2 = f2 >>= (\f -> fileExist f >>= \x -> unless x (void $ trace ("creating a history file: `" ++ f ++ "`") $ createFile f (ownerReadMode B..|. ownerWriteMode)) >> readFile f <&> (T.split (=='\n') . T.pack))
 
 {- better solution found: IO T.Text
 shortcuts :: [(T.Text, IO T.Text)]

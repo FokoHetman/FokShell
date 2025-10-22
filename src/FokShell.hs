@@ -21,6 +21,7 @@ import Network.HostName
 import JobManager
 
 import ExposedTypes
+import Debug.Trace (traceShow)
 
 -- TODO:
 -- handle printing prompt with input, cursor, etc
@@ -74,7 +75,31 @@ parseEvent (ShellProcess conf state) key = do
     (KeyModifiers 0, Arrow d) -> case d of
         DLeft   -> moveCursor' conf DLeft  1 $> ShellProcess (conf {cursorLoc = min (cursorLoc conf + 1) (T.length $ input conf)}) state
         DRight  -> moveCursor' conf DRight 1 $> ShellProcess (conf {cursorLoc = max (cursorLoc conf - 1) 0}) state
-        _       -> undefined
+        Up      -> (\x ->  redrawFromCursor x {cursorLoc = T.length $ input x} >> moveCursor' x DRight (T.length $ input x) $> ShellProcess x state) (case historyIndex conf of
+            Nothing -> case history conf of 
+              []      -> conf
+              (x:_)  -> conf {historyIndex = Just (0, input conf), input = x}
+            Just (i, r) -> let j = min (length (history conf) - 1) (i+1) in conf {historyIndex = Just (j, r), input = history conf!!j}
+            )
+        Down      -> (\x -> redrawFromCursor x {cursorLoc = T.length $ input x} >> moveCursor' x DLeft (T.length $ input x) $> ShellProcess x state) (case historyIndex conf of
+            Nothing -> case history conf of 
+              []      -> conf
+              (x:_)  -> conf {historyIndex = Just (0, input conf), input = x}
+            Just (0, r) -> conf {historyIndex = Nothing, input = r}
+            Just (i, r) -> let j = min (length (history conf) - 1) (i-1) in conf {historyIndex = Just (j, r), input = history conf!!j}
+            )
+    (KeyModifiers 1 {-control-}, Arrow d) -> case d of
+        DLeft   -> moveCursor' conf DLeft (n DLeft) $> ShellProcess (conf {cursorLoc = cursorLoc conf + n DLeft}) state
+        DRight  -> moveCursor' conf DRight (n DRight) $> ShellProcess (conf {cursorLoc = cursorLoc conf - n DRight}) state
+        _ -> pure $ ShellProcess conf state
+      where
+        n DLeft = case T.words (snd $ T.splitAt (cursorLoc conf) $ T.reverse $ input conf) of
+          (x:_)   -> T.length x 
+          _       -> 0
+        n DRight = case reverse $ T.words (fst $  T.splitAt (cursorLoc conf) $ T.reverse $ input conf) of
+          (x:_)   -> T.length x 
+          _       -> 0
+        n _ = error "this should NEVER happen."
     (KeyModifiers 0, Enter) -> swallowPrompt (cursorLoc conf) (input conf) (prompt conf) >> putStrLn "" >> handleJob (ShellProcess conf {history = history conf ++ [T.strip (input conf)]} state) <* displayPrompt (prompt conf)
     (KeyModifiers 0, Backspace) -> moveCursor' conf DLeft 1 >> redrawFromCursor nconf $> ShellProcess nconf state
       where

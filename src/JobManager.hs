@@ -38,7 +38,7 @@ handleJob (ShellProcess conf state) = do
   --evaluateNodes (ShellProcess conf state) unodes
   --pure (ShellProcess conf state)
 
-
+-- todo: check whether executable exists (configurable) before launching it.
 spawnJob :: ShellConfig -> Job -> IO ShellConfig
 spawnJob conf j = do
   case task j of
