@@ -25,6 +25,7 @@ import Data.Bifunctor (Bifunctor(bimap))
 
 import Lib.Primitive
 import Lib.ColorScheme
+import Lib.Autocomplete (AutocompleteConfig)
 
 -- DISPLAY FUNCTIONS
 eputStrf :: IO T.Text -> IO ()
@@ -198,6 +199,7 @@ data ShellConfig = ShellConfig
   , history     :: [T.Text]
   , historyIndex:: Maybe (Int, T.Text)
   , getHistory  :: IO [T.Text]
+  , autocomplete:: AutocompleteConfig
   }
 
 data State = InputOutput
@@ -225,11 +227,6 @@ instance Def ShellConfig where
 
 readHistory :: IO FilePath -> IO [T.Text]
 readHistory f2 = f2 >>= (\f -> fileExist f >>= \x -> unless x (void $ trace ("creating a history file: `" ++ f ++ "`") $ createFile f (ownerReadMode B..|. ownerWriteMode)) >> readFile f <&> (T.split (=='\n') . T.pack))
-
-{- better solution found: IO T.Text
-shortcuts :: [(T.Text, IO T.Text)]
-shortcuts = [("%u", T.pack <$> getEffectiveUserName), ("%d", getFormattedDirectory), ("%h", T.pack <$> getHostName)]
--}
 
 replaceShortcuts :: [(T.Text, IO T.Text)] -> T.Text -> IO T.Text
 replaceShortcuts (x:xs) t = snd x >>= \y -> replaceShortcuts xs (T.replace (fst x) y t)

@@ -81,7 +81,7 @@ parseEvent (ShellProcess conf state) key = do
               (x:_)  -> conf {historyIndex = Just (0, input conf), input = x}
             Just (i, r) -> let j = min (length (history conf) - 1) (i+1) in conf {historyIndex = Just (j, r), input = history conf!!j}
             )
-        Down      -> (\x -> redrawFromCursor x {cursorLoc = T.length $ input x} >> moveCursor' x DLeft (T.length $ input x) $> ShellProcess x state) (case historyIndex conf of
+        Down      -> (\x -> redrawFromCursor x {cursorLoc = T.length $ input x} >> moveCursor' x DRight (T.length $ input x) $> ShellProcess x state) (case historyIndex conf of
             Nothing -> case history conf of 
               []      -> conf
               (x:_)  -> conf {historyIndex = Just (0, input conf), input = x}
