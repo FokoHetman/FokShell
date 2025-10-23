@@ -218,6 +218,8 @@ instance Def ShellConfig where
     , history = []
     , historyIndex = Nothing
     , getHistory = readHistory defaultHistoryFile
+
+    , autocomplete = def
     }
 
 readHistory :: IO FilePath -> IO [T.Text]

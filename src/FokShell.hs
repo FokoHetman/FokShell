@@ -25,6 +25,7 @@ import ExposedTypes
 import Lib.Format
 
 import Debug.Trace (traceShow)
+import Lib.Autocomplete (AutocompleteConfig(redrawHook))
 
 -- TODO:
 -- handle printing prompt with input, cursor, etc
@@ -134,6 +135,7 @@ parseEvent (ShellProcess conf state) key = do
     _ -> do 
       let bind = filter (\x -> fst x == key) $ binds conf
       unwrapBind bind $ ShellProcess conf state
+  autocompleteOverrides out
   pure $ updateWithKey key out
   where
     unwrapBind [x] defval = snd x defval
@@ -145,3 +147,5 @@ parseEvent (ShellProcess conf state) key = do
         inp = input c
         right = T.reverse $ T.take loc $ T.reverse inp
         left  = T.take (T.length inp - T.length right) inp
+
+    autocompleteOverrides (ShellProcess c _) = redrawHook (autocomplete c) (input c) (cursorLoc c) (colorScheme c)

@@ -4,7 +4,7 @@ module JobManager where
 import qualified Data.Text as T
 import ExposedTypes
 import Control.Applicative
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Char (isSpace)
 import Data.Functor
 import Debug.Trace (trace, traceShow)
@@ -13,6 +13,7 @@ import System.Process (CreateProcess(std_out, std_in, std_err), createProcess, p
 import GHC.IO.Exception (ExitCode(ExitSuccess))
 
 import System.IO
+import System.Directory (findExecutable)
 
 --import System.Process (CreateProcess (std_out))
 
@@ -54,19 +55,21 @@ spawnJob conf j = do
       stdinr  <- getHandle pipeIn
       stderrr <- getHandle pipeErr
 
-      pname <- complexToText n
-      args  <- mapM complexToText a
-      (s_in,sout,serr,ph) <- createProcess (proc (T.unpack pname) $ fmap T.unpack args)
-          {std_out = stdoutr, std_in = stdinr, std_err = stderrr}
-      let (JobMgr jobs) = jobManager conf
-      let newjob = j {stdinj = s_in, stdoutj = sout, stderrj = serr}
+      pname <- complexToText n <&> T.unpack
+      exists <- findExecutable pname <&> isJust
+      if not exists then putStrLn (pname ++ ": command not found") $> conf {- TODO: once exit statuses arive, return -1 here. -} else do
+        args  <- mapM complexToText a
+        (s_in,sout,serr,ph) <- createProcess (proc pname $ fmap T.unpack args)
+            {std_out = stdoutr, std_in = stdinr, std_err = stderrr}
+        let (JobMgr jobs) = jobManager conf
+        let newjob = j {stdinj = s_in, stdoutj = sout, stderrj = serr}
 
-      -- use process handle instead of pid in Job.
-      getPid ph >>= \case
-        Just p -> do
-          exitcode <- waitForProcess ph
-          pure conf {jobManager = JobMgr $ (newjob {pid = Just p, last_ec = exitcode}):jobs}
-        Nothing -> undefined -- undefined behavior. idk what to do when process has no id
+        -- use process handle instead of pid in Job.
+        getPid ph >>= \case
+          Just p -> do
+            exitcode <- waitForProcess ph
+            pure conf {jobManager = JobMgr $ (newjob {pid = Just p, last_ec = exitcode}):jobs}
+          Nothing -> undefined -- undefined behavior. idk what to do when process has no id
   --(t', h) <- walkTask $ task j
   where
     getHandle :: (Job -> PipeType) -> IO StdStream

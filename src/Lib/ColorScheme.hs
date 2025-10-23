@@ -17,11 +17,12 @@ data ColorScheme = ColorScheme {
   
   -- user-friendly colors
     colors      :: [(T.Text, Color)]
+  -- system colors
   , textColor   :: Color
   , shadowText  :: Color
-  , errorColor  :: Color
+  , successColor:: Color
   , warningColor:: Color
-  -- I don't know what other colors are there
+  , errorColor  :: Color
 }
 
 generateColorShortcuts :: ColorScheme -> [(T.Text, IO T.Text)]
@@ -32,7 +33,10 @@ generateColorShortcuts c = [
   , ("%w", wrap $ warningColor c)
   ] ++ fmap (bimap ("%"<>) wrap) (colors c)
   where
-    wrap = (<&> \x -> T.concat ["\ESC[38;2;", T.pack $ show x, "m"])
+    wrap = (<&> asciiColor)
+
+asciiColor :: RGB -> T.Text
+asciiColor c = T.concat ["\ESC[38;2;", T.pack $ show c, "m"]
 
 instance Def ColorScheme where
   def = ColorScheme {
@@ -41,4 +45,5 @@ instance Def ColorScheme where
   , shadowText = pure $ RGB 80 80 80
   , errorColor = pure $ RGB 200 20 5
   , warningColor=pure $ RGB 252 225 42
+  , successColor=pure $ RGB 50 168 82
   }
