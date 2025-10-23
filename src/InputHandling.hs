@@ -8,6 +8,7 @@ import Data.Char (chr, ord)
 import Data.List (singleton)
 
 import ExposedTypes
+import Lib.Format
 
 nextEvent :: IO KeyEvent
 nextEvent = do

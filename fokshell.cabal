@@ -63,6 +63,7 @@ library
                     , Lib.ColorScheme
                     , Lib.Primitive
                     , Lib.Autocomplete
+                    , Lib.Format
 --                    , InputHandling
 --                    , JobManager
 

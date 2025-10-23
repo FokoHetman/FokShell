@@ -9,6 +9,8 @@ type AutocompleteModel = T.Text -> [T.Text] -> IO [T.Text]
 defaultModel :: AutocompleteModel
 defaultModel t = undefined
 
+defaultHook :: T.Text -> Int -> IO ()
+defaultHook t i = undefined
 
 data AutocompleteConfig = AutocompleteConfig {
     model     :: AutocompleteModel
@@ -18,4 +20,5 @@ data AutocompleteConfig = AutocompleteConfig {
 instance Def AutocompleteConfig where
   def = AutocompleteConfig {
     model = defaultModel
+  , redrawHook = defaultHook
   }

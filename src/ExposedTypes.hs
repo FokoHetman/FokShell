@@ -8,7 +8,9 @@ import qualified Data.Bits as B
 import System.Exit (exitSuccess, ExitCode (ExitSuccess, ExitFailure))
 import Control.Monad (when, unless)
 import System.Directory (getCurrentDirectory, getHomeDirectory)
-import System.Posix (getEffectiveUserName, getEnv, fileExist, createFile, ownerWriteMode, setFileMode, ownerReadMode)
+import System.Posix (getEffectiveUserName, getEnv, fileExist, createFile, ownerWriteMode, setFileMode, ownerReadMode, closeFd)
+
+import qualified Data.Text.IO as TIO
 
 import System.FilePath ((</>))
 
@@ -27,16 +29,7 @@ import Lib.Primitive
 import Lib.ColorScheme
 import Lib.Autocomplete (AutocompleteConfig)
 
--- DISPLAY FUNCTIONS
-eputStrf :: IO T.Text -> IO ()
-eputStrf t = t >>= \x -> putStr (T.unpack x) <> hFlush stdout
-
-putStrf :: T.Text -> IO ()
-putStrf t = putStr (T.unpack t) <> hFlush stdout
-
--- COLOR SCHEME DATA, move to separate file
-
-
+import Lib.Format
 
 
 
@@ -105,8 +98,7 @@ displayTask (Task c t n sin out serr) = case n of
   ]
 displayTask (PCall e a) = mapM complexToText a >>= \as -> complexToText e >>= \es -> pure $ T.concat ["`", es, " [", T.unwords as, "]`"]
 
-data Direction = Up | Down | DRight | DLeft
-    deriving (Show,Eq)
+
 data KeyCode = Fn | Escape | Arrow Direction | Enter | Tab | Backspace | Delete | Character T.Text
     deriving (Show,Eq)
 newtype KeyModifiers = KeyModifiers Int
@@ -149,7 +141,7 @@ defaultHistoryFile :: IO FilePath
 defaultHistoryFile = getHomeDirectory <&> (</> ".fok_history")
 defaultExitHook :: Hook
 defaultExitHook (ShellProcess c _) = do
-  defaultHistoryFile >>= \x -> writeFile x $ T.unpack $ T.intercalate "\n" $ history c
+  defaultHistoryFile >>= \x -> writeFile x $ T.unpack $ T.strip $ T.intercalate "\n" $ T.strip <$> reverse (history c)
   putStrLn "\nexit"
   pure True
 
@@ -196,8 +188,11 @@ data ShellConfig = ShellConfig
   , lastEvent   :: KeyEvent
   , trigger     :: KeyEvent             -- this should never be overriden globally, locally it should be overwritten with the keyevent trigger (example at ^L handling)
   , jobManager  :: JobMgr
+
+  -- todo: extract into a separate Object, just like ColorSchemes and Autocomplete. Add settings such as ignore duplicates etc.
   , history     :: [T.Text]
   , historyIndex:: Maybe (Int, T.Text)
+
   , getHistory  :: IO [T.Text]
   , autocomplete:: AutocompleteConfig
   }
@@ -226,7 +221,7 @@ instance Def ShellConfig where
     }
 
 readHistory :: IO FilePath -> IO [T.Text]
-readHistory f2 = f2 >>= (\f -> fileExist f >>= \x -> unless x (void $ trace ("creating a history file: `" ++ f ++ "`") $ createFile f (ownerReadMode B..|. ownerWriteMode)) >> readFile f <&> (T.split (=='\n') . T.pack))
+readHistory f2 = f2 >>= (\f -> fileExist f >>= \x -> unless x (void $ trace ("creating a history file: `" ++ f ++ "`") $ createFile f (ownerReadMode B..|. ownerWriteMode) >>= closeFd) >> TIO.readFile f <&> reverse . T.split (=='\n'))
 
 replaceShortcuts :: [(T.Text, IO T.Text)] -> T.Text -> IO T.Text
 replaceShortcuts (x:xs) t = snd x >>= \y -> replaceShortcuts xs (T.replace (fst x) y t)
@@ -276,13 +271,6 @@ instance Def [(KeyEvent, Action)] where
       , ((control, Character "l"), \(ShellProcess config state) -> clearHook(hooks config) (ShellProcess config {trigger=(control, Character "l")} state) >>= \x -> if x then clearAction (ShellProcess config state) else pure $ ShellProcess config state)
     ]
 
-
-moveCursor :: Direction -> Int -> IO ()
-moveCursor _ 0 = pure ()
-moveCursor DLeft i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "D"
-moveCursor DRight i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "C"
-moveCursor Up i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "A"
-moveCursor Down i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "B"
 
 
 
