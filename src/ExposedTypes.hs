@@ -166,6 +166,8 @@ instance Def ShellHooks where
 data Swallow = Never | Swallowed (IO T.Text)
 data Prompt  = SingleLine (IO T.Text) Swallow | MultiLine (IO [T.Text]) Swallow
 
+type PromptGetter = ColorScheme -> Prompt
+
 
 getFormattedDirectory :: IO T.Text
 getFormattedDirectory = do
@@ -177,7 +179,7 @@ getFormattedDirectory = do
 -- TODO: extract to a separate file
 data ShellConfig = ShellConfig
   { hooks       :: ShellHooks
-  , prompt      :: Prompt
+  , prompt      :: PromptGetter
   
   , colorScheme :: ColorScheme
 
@@ -205,7 +207,7 @@ data ShellProcess = ShellProcess ShellConfig State
 instance Def ShellConfig where
   def = ShellConfig
     { hooks = def
-    , prompt = SingleLine (getFormattedDirectory <&> (<> " > ")) Never
+    , prompt = const $ SingleLine (getFormattedDirectory <&> (<> " > ")) Never
     , input = ""
 
     , cursorLoc = 0
@@ -257,13 +259,13 @@ redrawFromCursor c = putStrf $ T.concat [erase, lefts, cursorCode]
 
 
 haltAction :: Action
-haltAction (ShellProcess config state) = displayPrompt (prompt config) $> ShellProcess (config {input = ""}) state
+haltAction (ShellProcess config state) = displayPrompt (prompt config  $ colorScheme config) $> ShellProcess (config {input = ""}) state
 
 exitAction :: Action
 exitAction (ShellProcess _ _) = exitSuccess
 
 clearAction :: Action
-clearAction (ShellProcess c s) = putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt c) $> ShellProcess c s
+clearAction (ShellProcess c s) = putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt c $ colorScheme c) $> ShellProcess c s
 
 
 instance Def [(KeyEvent, Action)] where

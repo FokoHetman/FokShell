@@ -56,7 +56,7 @@ fokshell config = do
   done <- newEmptyMVar
   _ <- installHandler sigINT (Catch $ handleSignal shellProcRef done) Nothing
 
-  displayPrompt $ prompt config
+  displayPrompt $ prompt config $ colorScheme config
   eventLoop shellProcRef
 
 
@@ -108,10 +108,10 @@ parseEvent (ShellProcess conf state) key = do
           _       -> 0
         n _ = error "this should NEVER happen."
     
-    (KeyModifiers 0, Enter) -> swallowPrompt (cursorLoc conf) (input conf) (prompt conf) >> 
+    (KeyModifiers 0, Enter) -> swallowPrompt (cursorLoc conf) (input conf) (prompt conf $ colorScheme conf) >> 
         putStrLn "" >> 
           handleJob (ShellProcess conf {history = T.strip (input conf):history conf, historyIndex = Nothing} state) 
-        <* displayPrompt (prompt conf)
+        <* displayPrompt (prompt conf $ colorScheme conf)
     
     (KeyModifiers 0, Backspace) -> moveCursor' conf DLeft 1 >> redrawFromCursor nconf $> ShellProcess nconf state
       where

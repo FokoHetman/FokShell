@@ -14,9 +14,10 @@ instance Show RGB where
   show (RGB r g b) = show r ++ ";" ++ show g ++ ";" ++ show b
 
 data ColorScheme = ColorScheme {
-  
+  -- id for a messy Eq
+    scheme_id   :: T.Text
   -- user-friendly colors
-    colors      :: [(T.Text, Color)]
+  , colors      :: [(T.Text, Color)]
   -- system colors
   , textColor   :: Color
   , shadowText  :: Color
@@ -24,6 +25,10 @@ data ColorScheme = ColorScheme {
   , warningColor:: Color
   , errorColor  :: Color
 }
+
+instance Eq ColorScheme where
+  (==) a b = scheme_id a == scheme_id b
+
 
 generateColorShortcuts :: ColorScheme -> [(T.Text, IO T.Text)]
 generateColorShortcuts c = [
