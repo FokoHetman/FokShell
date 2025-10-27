@@ -42,8 +42,21 @@ myLightColorScheme = def {
   , shadowText = pure $ RGB 29 32 33
   }
 
+latteColorScheme :: ColorScheme
+latteColorScheme = def {
+    scheme_id = "latte"
+  , colors = [
+      ("c0", pure $ RGB 221 120 120)
+    , ("c1", pure $ RGB 214 93 14)
+    ]
+  , textColor = pure $ RGB 29 32 33
+  , shadowText = pure $ RGB 29 32 33
+  }
+
+
+
 colorSchemes :: [ColorScheme]
-colorSchemes = [myColorScheme, myLightColorScheme]
+colorSchemes = [myColorScheme, myLightColorScheme, latteColorScheme]
 
 {- TODO: make this work. Probably make Prompt/prompt's text a ~ function that takes a colorscheme -} 
 myPrompt :: ColorScheme -> Prompt

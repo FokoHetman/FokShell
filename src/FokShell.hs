@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings,LambdaCase #-}
 module FokShell where
 
 import InputHandling (nextEvent)
@@ -24,8 +24,8 @@ import JobManager
 import ExposedTypes
 import Lib.Format
 
-import Debug.Trace (traceShow)
-import Lib.Autocomplete (AutocompleteConfig(redrawHook))
+import Debug.Trace (traceShow, trace)
+import Lib.Autocomplete (AutocompleteConfig(redrawHook, model))
 
 -- TODO:
 -- handle printing prompt with input, cursor, etc
@@ -95,6 +95,12 @@ parseEvent (ShellProcess conf state) key = do
               Just (i, r) -> let j = min (length (history conf) - 1) (i-1) in conf {historyIndex = Just (j, r), input = history conf!!j}
             )
 
+    (KeyModifiers 0, Tab) ->  model (autocomplete conf) (input conf) (cursorLoc conf) (history conf) >>= (\case
+          [] -> pure $ ShellProcess conf state
+          [x]-> pure $ ShellProcess (replaceCurrent x conf) state
+          (x:xs)  -> pure $ ShellProcess conf state
+        ) . fst
+
     (KeyModifiers 1 {-control-}, Arrow d) -> case d of
         DLeft   -> moveCursor' conf DLeft (n DLeft) $> ShellProcess (conf {cursorLoc = cursorLoc conf + n DLeft}) state
         DRight  -> moveCursor' conf DRight (n DRight) $> ShellProcess (conf {cursorLoc = cursorLoc conf - n DRight}) state
@@ -138,6 +144,17 @@ parseEvent (ShellProcess conf state) key = do
   autocompleteOverrides out
   pure $ updateWithKey key out
   where
+    replaceCurrent :: T.Text -> ShellConfig -> ShellConfig
+    replaceCurrent with c = c {input = T.unwords new_ws}
+      where
+        ws = reverse $ T.words (input c)
+        new_ws = take (curWordI c - 1) ws ++ with:take (length ws - curWordI c - 1) ws
+
+    curWordI c = curWordI' (cursorLoc c) 0 $ T.words $ T.reverse (input c)
+    curWordI' i y (x:xs) = if T.length x > i then y else curWordI' (i-T.length x) (y+1) xs
+    curWordI' i y _ = y
+    
+
     unwrapBind [x] defval = snd x defval
     unwrapBind [] defval = pure defval
     unwrapBind _ _ = undefined
