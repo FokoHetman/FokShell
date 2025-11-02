@@ -28,7 +28,7 @@ myColorScheme = def {
     , ("c1", pure $ RGB 214 93 14)
     ]
   , textColor = pure $ RGB 235 219 178
-  , shadowText = pure $ RGB 29 32 33
+  , shadowText = pure $ RGB 60 60 60
   }
 
 myLightColorScheme :: ColorScheme

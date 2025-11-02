@@ -8,11 +8,13 @@ import Lib.ColorScheme
 import Data.Maybe (isJust)
 import Data.Functor
 import System.Directory (findExecutable, getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesDirectoryExist)
-import Control.Monad (when, liftM, filterM, join)
+import Control.Monad (when, liftM, filterM, join, unless)
 import System.Environment (getEnv)
 import Debug.Trace (traceShow)
 
 import System.FilePath.Posix ((</>))
+import Data.Char (isSpace)
+import Data.Bool (bool)
 
 getDirsInPath :: IO [FilePath]
 getDirsInPath = filterM doesDirectoryExist . fmap T.unpack . T.split (==':') . T.pack =<< getEnv "PATH"
@@ -44,12 +46,11 @@ defaultModel inp cursor hist = if isMatchingExecutable then do
     --print("over")
 
     let matches = filter (T.isPrefixOf inp) $ fmap T.pack $ localExecutables ++ pathExecs
-    
     pure (matches, wholeMatches)
   else do 
     --print fstWord
     --print curWord
-    pure ([], [])
+    pure ([], wholeMatches)
   where
     pathExecutables = mapM executablesInDir =<< getDirsInPath
     fstWord = fstWord' $ T.words inp
@@ -63,17 +64,29 @@ defaultModel inp cursor hist = if isMatchingExecutable then do
     wholeMatches = filter (T.isPrefixOf inp) hist
 
 
-defaultHook :: T.Text -> Int -> ColorScheme -> IO ()
-defaultHook t i c = moveCursor DLeft (len - i) >> ((findExecutable (T.unpack fstWord) >>= formattedWord . isJust) >>= putStrf) >> moveCursor DRight (len - i - T.length fstWord)
+-- stop using fstWord == curWord you fucking piece of shit it makes the thing break when `command command`
+
+
+defaultHook :: T.Text -> Int -> ColorScheme -> ([T.Text], [T.Text]) -> IO ()
+defaultHook t i c m = unless (T.null t) $
+    when (i >= T.length t - T.length fstWord) (resetCursor>> displayExecutable >> moveToCursor)
   where
-    len = T.length t
-    fstWord = fstWord' $ T.words t
-    fstWord' (x:_) = x
-    fstWord' [] = ""
+    fstWord = head $ T.words t
+
+    rest = bool "" " " (T.length f>0) <> f
+      where
+        f = T.concat $ tail $ T.words t
+    resetCursor = when (T.length t > i) $ moveCursor DLeft (T.length t - i)
+
     formattedWord e = (if e || T.null fstWord then successColor c else errorColor c) <&> (<>fstWord<>"\ESC[0m") . asciiColor
+    displayExecutable = (findExecutable (T.unpack fstWord) >>= formattedWord . isJust) >>= putStrf
+
+    moveToCursor = {-traceShow rest $ -}bool (when (T.length rest > i) $ moveCursor DRight (T.length rest - i)) (moveCursor DLeft (i - T.length rest)) (i > T.length rest) 
+
+
 data AutocompleteConfig = AutocompleteConfig {
     model     :: AutocompleteModel
-  , redrawHook:: T.Text -> Int -> ColorScheme -> IO ()
+  , redrawHook:: T.Text -> Int -> ColorScheme -> ([T.Text], [T.Text]) -> IO ()
   }
 
 instance Def AutocompleteConfig where
@@ -81,3 +94,12 @@ instance Def AutocompleteConfig where
     model = defaultModel
   , redrawHook = defaultHook
   }
+
+unwrap (Just x) = x
+
+countLeadingWhitespace :: T.Text -> Int
+countLeadingWhitespace t
+      | T.null t  = 0
+      | not (isSpace $ T.head t) = 0
+      | isSpace (T.head t) = countLeadingWhitespace (T.tail t) + 1
+      | otherwise = 0

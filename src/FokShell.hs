@@ -26,6 +26,7 @@ import Lib.Format
 
 import Debug.Trace (traceShow, trace)
 import Lib.Autocomplete (AutocompleteConfig(redrawHook, model))
+import Data.List (singleton)
 
 -- TODO:
 -- handle printing prompt with input, cursor, etc
@@ -97,7 +98,7 @@ parseEvent (ShellProcess conf state) key = do
 
     (KeyModifiers 0, Tab) ->  model (autocomplete conf) (input conf) (cursorLoc conf) (history conf) >>= (\case
           [] -> pure $ ShellProcess conf state
-          [x]-> pure $ ShellProcess (replaceCurrent x conf) state
+          [x]-> (putStr . T.unpack) (differ (input conf) x) >> hFlush stdout $> ShellProcess (replaceCurrent x conf) state
           (x:xs)  -> pure $ ShellProcess conf state
         ) . fst
 
@@ -141,6 +142,7 @@ parseEvent (ShellProcess conf state) key = do
     _ -> do 
       let bind = filter (\x -> fst x == key) $ binds conf
       unwrapBind bind $ ShellProcess conf state
+  
   autocompleteOverrides out
   pure $ updateWithKey key out
   where
@@ -153,8 +155,7 @@ parseEvent (ShellProcess conf state) key = do
     curWordI c = curWordI' (cursorLoc c) 0 $ T.words $ T.reverse (input c)
     curWordI' i y (x:xs) = if T.length x > i then y else curWordI' (i-T.length x) (y+1) xs
     curWordI' i y _ = y
-    
-
+   
     unwrapBind [x] defval = snd x defval
     unwrapBind [] defval = pure defval
     unwrapBind _ _ = undefined
@@ -165,4 +166,7 @@ parseEvent (ShellProcess conf state) key = do
         right = T.reverse $ T.take loc $ T.reverse inp
         left  = T.take (T.length inp - T.length right) inp
 
-    autocompleteOverrides (ShellProcess c _) = redrawHook (autocomplete c) (input c) (cursorLoc c) (colorScheme c)
+    autocompleteOverrides (ShellProcess c _) = model (autocomplete c) (input c) (cursorLoc c) (history c) >>= redrawHook (autocomplete c) (input c) (cursorLoc c) (colorScheme c)
+
+
+
