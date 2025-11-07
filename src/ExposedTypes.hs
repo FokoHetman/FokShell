@@ -194,15 +194,11 @@ data ShellConfig = ShellConfig
   -- todo: extract into a separate Object, just like ColorSchemes and Autocomplete. Add settings such as ignore duplicates etc.
   , history     :: [T.Text]
   , historyIndex:: Maybe (Int, T.Text)
-
   , getHistory  :: IO [T.Text]
+  
   , autocomplete:: AutocompleteConfig
+  , cursorConfig:: CursorConfig
   }
-
-data State = InputOutput
-
-data ShellProcess = ShellProcess ShellConfig State
-
 
 instance Def ShellConfig where
   def = ShellConfig
@@ -222,7 +218,49 @@ instance Def ShellConfig where
     , getHistory = readHistory defaultHistoryFile
 
     , autocomplete = def
+    , cursorConfig = def
     }
+
+updateCursorShape :: ShellConfig -> IO ()
+updateCursorShape = (\x -> putStr x <> hFlush stdout) . show . cursorShape . cursorConfig
+
+{-
+ESC[0 q 	changes cursor shape to steady block
+ESC[1 q 	changes cursor shape to steady block also
+ESC[2 q 	changes cursor shape to blinking block
+ESC[3 q 	changes cursor shape to steady underline
+ESC[4 q 	changes cursor shape to blinking underline
+ESC[5 q 	changes cursor shape to steady bar
+ESC[6 q 	changes cursor shape to blinking bar
+-}
+
+data CursorShape = SteadyBlock | BlinkingBlock | SteadyUnderline | BlinkingUnderline | SteadyBar | BlinkingBar
+
+instance Show CursorShape where
+  show BlinkingBlock      = "\ESC[0 q"
+  show SteadyBlock        = "\ESC[2 q"
+  show BlinkingUnderline  = "\ESC[3 q"
+  show SteadyUnderline    = "\ESC[4 q"
+  show BlinkingBar        = "\ESC[5 q"
+  show SteadyBar          = "\ESC[6 q"
+
+
+newtype CursorConfig = CursorConfig
+  { cursorShape :: CursorShape
+  }
+
+instance Def CursorConfig where
+  def = CursorConfig { cursorShape = BlinkingBar }
+
+
+
+
+data State = InputOutput
+
+data ShellProcess = ShellProcess ShellConfig State
+
+
+
 
 readHistory :: IO FilePath -> IO [T.Text]
 readHistory f2 = f2 >>= (\f -> fileExist f >>= \x -> unless x (void $ trace ("creating a history file: `" ++ f ++ "`") $ createFile f (ownerReadMode B..|. ownerWriteMode) >>= closeFd) >> TIO.readFile f <&> reverse . T.split (=='\n'))

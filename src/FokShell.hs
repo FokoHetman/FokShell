@@ -58,6 +58,7 @@ fokshell config = do
   _ <- installHandler sigINT (Catch $ handleSignal shellProcRef done) Nothing
 
   displayPrompt $ prompt config $ colorScheme config
+  updateCursorShape config
   eventLoop shellProcRef
 
 
