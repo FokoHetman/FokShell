@@ -81,20 +81,20 @@ parseEvent (ShellProcess conf state) key = do
     (KeyModifiers 0, Arrow d) -> case d of
         DLeft   -> moveCursor' conf DLeft  1 $> ShellProcess (conf {cursorLoc = min (cursorLoc conf + 1) (T.length $ input conf)}) state
         DRight  -> moveCursor' conf DRight 1 $> ShellProcess (conf {cursorLoc = max (cursorLoc conf - 1) 0}) state
-        Up      -> moveCursor' conf DLeft (T.length (input conf) - cursorLoc conf) >> 
-          (\x ->  redrawFromCursor x {cursorLoc = T.length $ input x} >>  moveCursor' x {cursorLoc = T.length $ input x} DRight (T.length $ input x) $> ShellProcess x state) 
+        Up      -> when (T.length (input conf) - cursorLoc conf > 0 ) (moveCursor' conf DLeft (T.length (input conf) - cursorLoc conf)) >> 
+          (\x ->  redrawFromCursor x {cursorLoc = T.length $ input x} >>  moveCursor' x {cursorLoc = T.length $ input x} DRight (T.length $ input x) $> ShellProcess x {cursorLoc = 0} state) 
             (case historyIndex conf of
             Nothing -> case history conf of 
               []      -> conf
               (x:_)  -> conf {historyIndex = Just (0, input conf), input = x}
             Just (i, r) -> let j = min (length (history conf) - 1) (i+1) in conf {historyIndex = Just (j, r), input = history conf!!j}
             )
-        Down      -> moveCursor' conf DLeft (T.length (input conf) - cursorLoc conf) >>
-          (\x -> redrawFromCursor x {cursorLoc = T.length $ input x} >> moveCursor' x {cursorLoc = T.length $ input x} DRight (T.length $ input x) $> ShellProcess x state)
+        Down      -> when (T.length (input conf) - cursorLoc conf > 0 ) (moveCursor' conf DLeft (T.length (input conf) - cursorLoc conf)) >>
+          (\x -> redrawFromCursor x {cursorLoc = T.length $ input x} >> moveCursor' x {cursorLoc = T.length $ input x} DRight (T.length $ input x) $> ShellProcess x {cursorLoc = 0} state)
             (case historyIndex conf of
               Nothing -> conf
               Just (0, r) -> conf {historyIndex = Nothing, input = r}
-              Just (i, r) -> let j = min (length (history conf) - 1) (i-1) in conf {historyIndex = Just (j, r), input = history conf!!j}
+              Just (i, r) -> let j = max 0 (i-1) in conf {historyIndex = Just (j, r), input = history conf!!j}
             )
 
     (KeyModifiers 0, Tab) ->  model (autocomplete conf) (input conf) (cursorLoc conf) (history conf) >>= (\case
