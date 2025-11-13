@@ -7,7 +7,7 @@ import Lib.Format
 import Lib.ColorScheme
 import Data.Maybe (isJust, fromMaybe, isNothing)
 import Data.Functor
-import System.Directory (findExecutable, getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesDirectoryExist)
+import System.Directory (findExecutable, getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesDirectoryExist, canonicalizePath)
 import Control.Monad (when, liftM, filterM, join, unless)
 import System.Environment (getEnv)
 import Debug.Trace (traceShow)
@@ -18,36 +18,12 @@ import Data.Bool (bool)
 import Control.Arrow (Arrow(first))
 import Data.Foldable (for_)
 
-getDirsInPath :: IO [FilePath]
-getDirsInPath = filterM doesDirectoryExist . fmap T.unpack . T.split (==':') . T.pack =<< getEnv "PATH"
-
-executablesInDir :: FilePath -> IO [FilePath]
-executablesInDir t = getDirectoryContents t >>= filterM (fmap executable . getPermissions . (t</>))
-
-
 {- input -> cursor location -> history -> most related autocompletes in form of (CurrentWord, WholeQuery) -}
-type AutocompleteModel = T.Text -> Int -> [T.Text] -> IO ([T.Text], [T.Text])
+type AutocompleteModel = T.Text -> Int -> [T.Text] -> [T.Text] -> IO ([T.Text], [T.Text])
 
 defaultModel :: AutocompleteModel
-defaultModel inp cursor hist = if isMatchingExecutable then do
-
-    --print curWord
-    --print fstWord
-
-    --getDirsInPath >>= mapM getDirectoryContents  >>= print
-    
-    localFiles <- getDirectoryContents =<< getCurrentDirectory
-    localExecutables <- fmap ("./" <>) <$> filterM (fmap executable . getPermissions) localFiles
-
-    --print "local:"
-    --print localExecutables
-
-    pathExecs <- pathExecutables <&> concat
-    --print "path:"
-    --print pathExecs
-    --print("over")
-
-    let matches = filter (T.isPrefixOf fstWord) $ fmap T.pack $ localExecutables ++ pathExecs
+defaultModel inp cursor hist executables = if isMatchingExecutable then do
+    let matches = filter (T.isPrefixOf fstWord) executables
     pure (matches, wholeMatches)
   else do 
     --print fstWord

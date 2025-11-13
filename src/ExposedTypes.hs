@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase, OverloadedStrings #-}
+{-# LANGUAGE LambdaCase, OverloadedStrings, ExistentialQuantification #-}
 module ExposedTypes where
 
 import qualified Data.Text as T
@@ -6,13 +6,13 @@ import qualified Data.Bits as B
 
 
 import System.Exit (exitSuccess, ExitCode (ExitSuccess, ExitFailure))
-import Control.Monad (when, unless)
-import System.Directory (getCurrentDirectory, getHomeDirectory)
+import Control.Monad (when, unless, filterM)
+import System.Directory (getCurrentDirectory, getHomeDirectory, getDirectoryContents, getPermissions, Permissions (executable))
 import System.Posix (getEffectiveUserName, getEnv, fileExist, createFile, ownerWriteMode, setFileMode, ownerReadMode, closeFd)
 
 import qualified Data.Text.IO as TIO
 
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeFileName)
 
 import Data.Functor
 import System.IO (hFlush, stdout, IOMode)
@@ -30,6 +30,7 @@ import Lib.ColorScheme
 import Lib.Autocomplete (AutocompleteConfig)
 
 import Lib.Format
+import Data.Dynamic (Dynamic, toDyn)
 
 
 
@@ -140,14 +141,14 @@ defaultHaltHook _ = do
 defaultHistoryFile :: IO FilePath
 defaultHistoryFile = getHomeDirectory <&> (</> ".fok_history")
 defaultExitHook :: Hook
-defaultExitHook (ShellProcess c _) = do
-  defaultHistoryFile >>= \x -> writeFile x $ T.unpack $ T.strip $ T.intercalate "\n" $ T.strip <$> reverse (history c)
+defaultExitHook proc = do
+  defaultHistoryFile >>= \x -> writeFile x $ T.unpack $ T.strip $ T.intercalate "\n" $ T.strip <$> reverse (history (shellConfig proc))
   putStrLn "\nexit"
   pure True
 
 defaultClearHook :: Hook
-defaultClearHook (ShellProcess conf _) = do
-  if lastEvent conf == trigger conf then
+defaultClearHook proc = do
+  if lastEvent (shellConfig proc) == trigger (shellConfig proc) then
     pure False
   else
     pure True
@@ -257,10 +258,28 @@ instance Def CursorConfig where
 
 data State = InputOutput
 
-data ShellProcess = ShellProcess ShellConfig State
+data ShellProcess = ShellProcess {
+    shellConfig :: ShellConfig
+  , shellState  :: State
+  , shellCache  :: Cache T.Text (Cache T.Text Dynamic)
+}
+
+updatePath :: ShellProcess -> IO ShellProcess 
+updatePath proc = do
+  path <- getEnv "PATH" >>= \case
+    Just x -> pure x
+    _ -> pure ""
+  localFiles <- getDirectoryContents =<< getCurrentDirectory
+  localExecutables <- fmap ("./" <>) <$> filterM (fmap executable . getPermissions) localFiles
+  pathExecs <- pathExecutables <&> fmap takeFileName . concat
 
 
+  let envcache = Entry ("executables", Cache [Entry ("PATH", toDyn path), Entry ("execs", toDyn $ fmap T.pack $ pathExecs ++ localExecutables)])
 
+  pure proc {shellCache = Cache $ getCache (removeFromCache (shellCache proc) "executables") ++ [envcache]}
+  
+  where
+    pathExecutables = mapM executablesInDir =<< getDirsInPath
 
 readHistory :: IO FilePath -> IO [T.Text]
 readHistory f2 = f2 >>= (\f -> fileExist f >>= \x -> unless x (void $ trace ("creating a history file: `" ++ f ++ "`") $ createFile f (ownerReadMode B..|. ownerWriteMode) >>= closeFd) >> TIO.readFile f <&> reverse . T.split (=='\n'))
@@ -297,20 +316,20 @@ redrawFromCursor c = putStrf $ T.concat [erase, lefts, cursorCode]
 
 
 haltAction :: Action
-haltAction (ShellProcess config state) = displayPrompt (prompt config  $ colorScheme config) $> ShellProcess (config {input = ""}) state
+haltAction proc = let config = shellConfig proc in displayPrompt (prompt config  $ colorScheme config) $> proc {shellConfig = config {input = ""}}
 
 exitAction :: Action
-exitAction (ShellProcess _ _) = exitSuccess
+exitAction (ShellProcess {}) = exitSuccess
 
 clearAction :: Action
-clearAction (ShellProcess c s) = putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt c $ colorScheme c) $> ShellProcess c s
+clearAction proc = let config = shellConfig proc in putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt config $ colorScheme config) $> proc
 
 
 instance Def [(KeyEvent, Action)] where
   def = [
-        ((control, Character "c"), \(ShellProcess config state) -> haltHook (hooks config) (ShellProcess config state) >>= \x -> if x then haltAction (ShellProcess config state) else pure $ ShellProcess config state)
-      , ((control, Character "d"), \(ShellProcess config state) -> exitHook (hooks config) (ShellProcess config state) >>= \x -> if x then exitAction (ShellProcess config state) else pure $ ShellProcess config state)
-      , ((control, Character "l"), \(ShellProcess config state) -> clearHook(hooks config) (ShellProcess config {trigger=(control, Character "l")} state) >>= \x -> if x then clearAction (ShellProcess config state) else pure $ ShellProcess config state)
+        ((control, Character "c"), \proc -> haltHook (hooks (shellConfig proc)) proc >>= \x -> if x then haltAction proc else pure proc)
+      , ((control, Character "d"), \proc -> exitHook (hooks (shellConfig proc)) proc >>= \x -> if x then exitAction proc else pure proc)
+      , ((control, Character "l"), \proc -> clearHook(hooks (shellConfig proc)) (proc {shellConfig = (shellConfig proc) {trigger=(control, Character "l")}}) >>= \x -> if x then clearAction proc else pure proc)
     ]
 
 
@@ -323,6 +342,6 @@ moveCursor' _ _ _ = error "unsupported '-wrapped direction"
 
 
 updateWithKey :: KeyEvent -> ShellProcess -> ShellProcess
-updateWithKey event (ShellProcess conf state) = ShellProcess conf {lastEvent=event} state
+updateWithKey event proc = proc {shellConfig = (shellConfig proc) {lastEvent=event}}
 
 

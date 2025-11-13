@@ -24,8 +24,9 @@ import System.Directory (findExecutable)
 
 
 handleJob :: ShellProcess -> IO ShellProcess
-handleJob (ShellProcess conf state) = do
+handleJob proc = do
   --putStrLn $ "Job Manager handling: " ++ T.unpack (input conf)
+  let conf = shellConfig proc
   let task = mkTask $ T.strip $ input conf
 
   
@@ -33,11 +34,9 @@ handleJob (ShellProcess conf state) = do
 
   case task of
     -- overriding input here
-    Just t  -> displayTask t >>= print >> spawnJob conf { input="", cursorLoc=0 } (mkJob t Terminal Terminal Terminal) >>= \x -> pure $ ShellProcess x state
-    Nothing -> pure $ ShellProcess conf state
+    Just t  -> displayTask t >>= print >> spawnJob conf { input="", cursorLoc=0 } (mkJob t Terminal Terminal Terminal) >>= \x -> pure proc {shellConfig = x}
+    Nothing -> pure proc
 
-  --evaluateNodes (ShellProcess conf state) unodes
-  --pure (ShellProcess conf state)
 
 -- todo: check whether executable exists (configurable) before launching it.
 spawnJob :: ShellConfig -> Job -> IO ShellConfig

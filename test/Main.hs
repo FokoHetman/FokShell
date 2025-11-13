@@ -89,8 +89,8 @@ main = do
     , prompt = myPrompt
     , colorScheme = myColorScheme
     , binds = def ++ [
-      ((control, Character "t"), \(ShellProcess config state) -> 
-        let conf = config {colorScheme = nextColorScheme (colorScheme config)} in redraw conf $> ShellProcess conf state)
+      ((control, Character "t"), \proc -> 
+        let config = shellConfig proc in let conf = config {colorScheme = nextColorScheme (colorScheme config)} in redraw conf $> proc)
     ]
     }
     where
