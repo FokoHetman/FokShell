@@ -25,12 +25,13 @@ import ExposedTypes
 import Lib.Format
 
 import Debug.Trace (traceShow, trace)
-import Lib.Autocomplete (AutocompleteConfig(redrawHook, model))
+import Lib.Autocomplete (AutocompleteConfig(redrawHook, model), extractIndexes)
 import Data.List (singleton)
 
 import Lib.Primitive
 import Data.Dynamic (fromDynamic, toDyn)
 import Data.Maybe (fromMaybe)
+import Data.Bool (bool)
 
 -- TODO:
 -- handle printing prompt with input, cursor, etc
@@ -106,11 +107,11 @@ parseEvent proc key = do
               Just (i, r) -> let j = max 0 (i-1) in conf {historyIndex = Just (j, r), input = history conf!!j}
             )
 
-    (KeyModifiers 0, Tab) ->  model (autocomplete conf) (input conf) (cursorLoc conf) (history conf) executablelist >>= (\case
+    (KeyModifiers 0, Tab) -> bool (pure proc) (model (autocomplete conf) (input conf) (cursorLoc conf) (history conf) executablelist >>= (\case
           [] -> pure proc
-          [x]-> (putStr . T.unpack) (differ (input conf) x) >> hFlush stdout $> proc {shellConfig = replaceCurrent x conf}
+          [x]-> (putStr . T.unpack) (differ (curWord conf) x) >> hFlush stdout $> proc {shellConfig = replaceCurrent x conf}
           (x:xs)  -> pure proc
-        ) . fst
+        ) . fst) (cursorIndex conf == Just 0)
 
     (KeyModifiers 1 {-control-}, Arrow d) -> case d of
         DLeft   -> moveCursor' conf DLeft (n DLeft) $> proc {shellConfig = conf {cursorLoc = cursorLoc conf + n DLeft}}
@@ -156,11 +157,30 @@ parseEvent proc key = do
   autocompleteOverrides out
   pure $ updateWithKey key out
   where
+
+
+    getIndexes c = extractIndexes (input c) (cursorLoc c)
+    cursorIndex c = snd $ getIndexes c
+    matchIndex c = fst $ getIndexes c
+    curWord c = maybe "" (reverse (T.words $ input c)!!) (matchIndex c)
+
     replaceCurrent :: T.Text -> ShellConfig -> ShellConfig
-    replaceCurrent with c = c {input = T.unwords new_ws}
+    replaceCurrent with c = c {input = ninput}
       where
-        ws = reverse $ T.words (input c)
-        new_ws = take (curWordI c - 1) ws ++ with:take (length ws - curWordI c - 1) ws
+        t = input c
+        i = cursorLoc c
+        (matchIndex, cursorIndex) = extractIndexes (input c) (cursorLoc c)
+        
+        curWord = matchIndex <&> (reverse (T.words t)!!)
+        (curWordLeft, curWordRight) = case (curWord, cursorIndex) of
+          (Just x, Just y) -> (T.take (T.length x - y) x, T.reverse $ T.take y $ T.reverse x)
+          _ -> ("", "")
+
+        left = bool "" (T.take (T.length t - i - T.length curWordLeft) t) (T.length t > i)
+        right = T.reverse $ T.take (i - T.length curWordRight) $ T.reverse t
+        ninput =  left <> with <> right
+        --ws = reverse $ T.words (input c)
+        --new_ws = take (curWordI c - 1) ws ++ with:take (length ws - curWordI c - 1) ws
 
     curWordI c = curWordI' (cursorLoc c) 0 $ T.words $ T.reverse (input c)
     curWordI' i y (x:xs) = if T.length x > i then y else curWordI' (i-T.length x) (y+1) xs
@@ -179,7 +199,6 @@ parseEvent proc key = do
     
     executablelist :: [T.Text]
     executablelist = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache proc) "executables" >>= \x -> lookupCache x "execs")
-        
 
     autocompleteOverrides proc' = let c = shellConfig proc' in model (autocomplete c) (input c) (cursorLoc c) (history c) executablelist >>= redrawHook (autocomplete c) (input c) (cursorLoc c) (colorScheme c)
 

@@ -12,30 +12,39 @@ import Control.Monad (when, liftM, filterM, join, unless)
 import System.Environment (getEnv)
 import Debug.Trace (traceShow)
 
-import System.FilePath.Posix ((</>))
+import System.FilePath.Posix ((</>), takeDirectory)
 import Data.Char (isSpace)
 import Data.Bool (bool)
 import Control.Arrow (Arrow(first))
 import Data.Foldable (for_)
+import Data.List (isPrefixOf)
 
 {- input -> cursor location -> history -> most related autocompletes in form of (CurrentWord, WholeQuery) -}
 type AutocompleteModel = T.Text -> Int -> [T.Text] -> [T.Text] -> IO ([T.Text], [T.Text])
+{- todo: make input a Record, consolidate last 2 args into passing Caches -}
 
 defaultModel :: AutocompleteModel
 defaultModel inp cursor hist executables = if isMatchingExecutable then do
     let matches = filter (T.isPrefixOf fstWord) executables
     pure (matches, wholeMatches)
-  else do 
+  else do
+    let d = takeDirectory $ T.unpack curWord
+    --print "///"
+    --print d
+    --print "///"
+    localFiles <- getDirectoryContents d
+    --print "\\\\\\"
+    --print localFiles
+    --print "\\\\\\"
+    let matches = filter (T.isPrefixOf curWord) $ bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` curWord) <$> (fmap T.pack localFiles)
     --print fstWord
     --print curWord
-    pure ([], wholeMatches)
+    pure (matches, wholeMatches)
   where
     pathExecutables = mapM executablesInDir =<< getDirsInPath
 
     (matchIndex, cursorIndex) = extractIndexes inp cursor
-    curWord = case matchIndex of
-      Just x -> T.words inp !! x
-      Nothing-> ""
+    curWord = maybe "" (reverse (T.words inp)!!) matchIndex
     fstWord = fstWord' $ T.words inp
     fstWord' (x:__) = x
     fstWord' [] = ""
@@ -85,7 +94,7 @@ defaultHook t i c m = unless (T.null t) $
     displayCurrent = for_ curWord putStrf
 
     pred = case fst m of 
-      (x:_) -> T.stripPrefix fstWord x
+      (x:_) -> curWord >>= (`T.stripPrefix` x)
       [] -> Nothing
     --displayPrediction = putStrf pred
     (displayPrediction, retrievePrediction) = case pred of 

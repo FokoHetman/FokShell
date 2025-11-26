@@ -62,8 +62,8 @@ complexToText (Basic t) = pure t
 complexToText (EnvVar t) = getEnv (T.unpack t) >>= \case
                             Just x -> pure $ T.pack x
                             Nothing -> pure  T.empty
-complexToText (Variant ts) = undefined--T.unwords $ fmap complexToText ts
-complexToText (Combination ts) = undefined
+complexToText (Variant ts) = mapM complexToText ts <&> T.unwords
+complexToText (Combination ts) = error $ show ts
 
 
 type Executable = StringComplex
@@ -272,8 +272,6 @@ updatePath proc = do
   localFiles <- getDirectoryContents =<< getCurrentDirectory
   localExecutables <- fmap ("./" <>) <$> filterM (fmap executable . getPermissions) localFiles
   pathExecs <- pathExecutables <&> fmap takeFileName . concat
-
-
   let envcache = Entry ("executables", Cache [Entry ("PATH", toDyn path), Entry ("execs", toDyn $ fmap T.pack $ pathExecs ++ localExecutables)])
 
   pure proc {shellCache = Cache $ getCache (removeFromCache (shellCache proc) "executables") ++ [envcache]}

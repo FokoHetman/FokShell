@@ -41,4 +41,3 @@ getDirsInPath = filterM doesDirectoryExist . fmap T.unpack . T.split (==':') . T
 executablesInDir :: FilePath -> IO [FilePath]
 executablesInDir t = getDirectoryContents t >>= mapM (pure . (t</>)) >>= mapM canonicalizePath >>= filterM (fmap executable . getPermissions . (t</>)) --filterM (fmap executable . getPermissions . (t</>))
 
-

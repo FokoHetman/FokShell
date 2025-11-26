@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Lib.ColorScheme where
 
-import Data.Text as T
+import qualified Data.Text as T
 import Data.Functor
 
 import Lib.Primitive
