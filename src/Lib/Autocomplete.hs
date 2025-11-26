@@ -7,7 +7,7 @@ import Lib.Format
 import Lib.ColorScheme
 import Data.Maybe (isJust, fromMaybe, isNothing)
 import Data.Functor
-import System.Directory (findExecutable, getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesDirectoryExist, canonicalizePath)
+import System.Directory (findExecutable, getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable, readable), doesDirectoryExist, canonicalizePath)
 import Control.Monad (when, liftM, filterM, join, unless)
 import System.Environment (getEnv)
 import Debug.Trace (traceShow)
@@ -32,14 +32,21 @@ defaultModel inp cursor hist executables = if isMatchingExecutable then do
     --print "///"
     --print d
     --print "///"
-    localFiles <- getDirectoryContents d
-    --print "\\\\\\"
-    --print localFiles
-    --print "\\\\\\"
-    let matches = filter (T.isPrefixOf curWord) $ bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` curWord) <$> (fmap T.pack localFiles)
-    --print fstWord
-    --print curWord
-    pure (matches, wholeMatches)
+    exists <- doesDirectoryExist d
+    if exists then getPermissions d >>= \x ->
+      if readable x then do
+        localFiles <- getDirectoryContents d
+        --print "\\\\\\"
+        --print localFiles
+        --print "\\\\\\"
+        let matches = filter (T.isPrefixOf curWord) $ bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` curWord) <$> fmap T.pack localFiles
+        --print fstWord
+        --print curWord
+        pure (matches, wholeMatches)
+      else
+        pure ([], [])
+    else
+      pure ([], [])
   where
     pathExecutables = mapM executablesInDir =<< getDirsInPath
 
