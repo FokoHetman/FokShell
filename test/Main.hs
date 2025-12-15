@@ -9,6 +9,8 @@ import ExposedTypes
 import Lib.ColorScheme
 import Lib.Primitive
 import Lib.Format
+import Lib.Config
+import Lib.Keys
 
 import qualified Data.Text as T
 

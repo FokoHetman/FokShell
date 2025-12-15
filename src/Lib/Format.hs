@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Lib.Format where
 
 import qualified Data.Text as T
@@ -7,7 +8,7 @@ import Data.List (singleton)
 import qualified Data.Text.IO as T
 import System.Environment (getEnv)
 import Control.Monad (filterM)
-import System.Directory (getPermissions, Permissions (executable), doesDirectoryExist, canonicalizePath, getDirectoryContents)
+import System.Directory (getPermissions, Permissions (executable), doesDirectoryExist, canonicalizePath, getDirectoryContents, getHomeDirectory, getCurrentDirectory)
 import System.FilePath.Posix ((</>))
 
 moveCursor :: Direction -> Int -> IO ()
@@ -41,3 +42,8 @@ getDirsInPath = filterM doesDirectoryExist . fmap T.unpack . T.split (==':') . T
 executablesInDir :: FilePath -> IO [FilePath]
 executablesInDir t = getDirectoryContents t >>= mapM (pure . (t</>)) >>= mapM canonicalizePath >>= filterM (fmap executable . getPermissions . (t</>)) --filterM (fmap executable . getPermissions . (t</>))
 
+getFormattedDirectory :: IO T.Text
+getFormattedDirectory = do
+  dir <- getCurrentDirectory
+  home <- getHomeDirectory
+  pure $ T.replace (T.pack home) "~" (T.pack dir)

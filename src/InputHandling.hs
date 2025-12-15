@@ -7,7 +7,7 @@ import System.IO (hWaitForInput, stdin)
 import Data.Char (chr, ord)
 import Data.List (singleton)
 
-import ExposedTypes
+import Lib.Keys
 import Lib.Format
 
 nextEvent :: IO KeyEvent
@@ -36,11 +36,12 @@ getInputString = do
 
 stringToKeyEvent :: String -> KeyEvent
 stringToKeyEvent x
-          | head x == '\ESC'  = case x!!1 of
+          | head x == '\ESC' && length x > 1= case x!!1 of
             '[' -> case x!!2 of
               '1' -> if x!!3 == ';' then (modifierMatch $ x!!4, arrowMatch $ x!!5)  else unknown
               a   -> (KeyModifiers 0, arrowMatch a)
             _  -> (KeyModifiers 0, Escape)
+          | head x == '\ESC' = (KeyModifiers 0, Escape)
           | length x == 1 = charMatch $ head x
           | otherwise         = (KeyModifiers 0, Character $ T.pack x)
   where

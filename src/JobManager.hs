@@ -3,18 +3,14 @@ module JobManager where
 
 import qualified Data.Text as T
 import ExposedTypes
-import Control.Applicative
-import Data.Maybe (fromMaybe, isJust)
-import Data.Char (isSpace)
+import Data.Maybe (isJust)
 import Data.Functor
-import Debug.Trace (trace, traceShow)
-import Control.Arrow (Arrow(second))
-import System.Process (CreateProcess(std_out, std_in, std_err), createProcess, proc, StdStream (CreatePipe, UseHandle, Inherit), getPid, waitForProcess)
+import System.Process (CreateProcess(std_out, std_in, std_err), createProcess, proc, StdStream (UseHandle, Inherit), getPid, waitForProcess)
 import GHC.IO.Exception (ExitCode(ExitSuccess))
 
 import System.IO
 import System.Directory (findExecutable)
-
+import Lib.Config
 import Language.Parser
 
 --import System.Process (CreateProcess (std_out))

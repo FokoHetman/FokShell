@@ -33,6 +33,8 @@ import Data.Dynamic (fromDynamic, toDyn)
 import Data.Maybe (fromMaybe)
 import Data.Bool (bool)
 
+import Lib.Keys
+import Lib.Config
 -- TODO:
 -- handle printing prompt with input, cursor, etc
 -- job mgr
