@@ -32,6 +32,8 @@ import Lib.Autocomplete (AutocompleteConfig)
 import Lib.Format
 import Data.Dynamic (Dynamic, toDyn)
 
+import Language.Parser
+
 
 
 data Job = Job {
@@ -52,52 +54,6 @@ exitCodeToInt (ExitFailure c) = c
 
 
 newtype JobMgr = JobMgr [Job]
-
-
-data StringComplex = Basic T.Text | EnvVar T.Text | Variant [StringComplex] | Combination [StringComplex]
-  deriving (Show,Eq)
-
-complexToText :: StringComplex -> IO T.Text
-complexToText (Basic t) = pure t
-complexToText (EnvVar t) = getEnv (T.unpack t) >>= \case
-                            Just x -> pure $ T.pack x
-                            Nothing -> pure  T.empty
-complexToText (Variant ts) = mapM complexToText ts <&> T.unwords
-complexToText (Combination ts) = error $ show ts
-
-
-type Executable = StringComplex
-type Args       = [StringComplex]
-
-type FileName = (IO T.Text)
-
-data PipeType = File FileName IOMode | Terminal
-
-displayPipeType :: PipeType -> IO T.Text
-displayPipeType Terminal = pure "Terminal"
-displayPipeType (File fname mode) = fname >>= \x -> pure $ T.concat [x, "[", T.pack $ show mode, "]"]
-
-displayHide :: PipeType -> T.Text
-displayHide Terminal = "Terminal"
-displayHide (File _ mode) = T.concat ["File ? ", T.pack $ show mode]
-
-type Condition = (Int -> IO Bool)
-data Task = Task {condition :: Condition, body :: Task, next :: Maybe Task, stdinT :: PipeType, stdoutT :: PipeType, stderrT :: PipeType} | PCall Executable Args
-
-instance Show Task where
-  show (PCall _ a) = "`" ++ "hidden behind IO"{-T.unpack (complexToText e)-} ++ " [" ++ (T.unpack . T.unwords) (fmap (const "hidden behind IO") a) ++ "]`"
-  show (Task _ t n sin sout serr) = "{" ++ T.unpack (displayHide sin) ++ "}c -> " ++ show t ++ case n of
-    Just x -> "=>" ++ show x
-    Nothing -> ""
-    ++ "-->" ++ T.unpack (displayHide sout)
-
-displayTask :: Task -> IO T.Text
-displayTask (Task c t n sin out serr) = case n of 
-    Just x -> displayTask x >>= \y -> pure $ T.concat ["=>", y]
-    Nothing -> pure "" 
-  >>= \x -> displayTask t >>= \t -> displayPipeType sin >>= \sin -> displayPipeType out >>= \sout -> pure $ T.concat ["{", sin, "}c->", t, x, "-->", sout
-  ]
-displayTask (PCall e a) = mapM complexToText a >>= \as -> complexToText e >>= \es -> pure $ T.concat ["`", es, " [", T.unwords as, "]`"]
 
 
 data KeyCode = Fn | Escape | Arrow Direction | Enter | Tab | Backspace | Delete | Character T.Text

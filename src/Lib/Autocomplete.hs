@@ -19,6 +19,8 @@ import Control.Arrow (Arrow(first))
 import Data.Foldable (for_)
 import Data.List (isPrefixOf)
 
+import Language.Parser
+
 {- input -> cursor location -> history -> most related autocompletes in form of (CurrentWord, WholeQuery) -}
 type AutocompleteModel = T.Text -> Int -> [T.Text] -> [T.Text] -> IO ([T.Text], [T.Text])
 {- todo: make input a Record, consolidate last 2 args into passing Caches -}
@@ -59,6 +61,22 @@ defaultModel inp cursor hist executables = if isMatchingExecutable then do
 
     wholeMatches = filter (T.isPrefixOf inp) hist
 
+-- theoritically that's not needed
+{-languageModel :: AutocompleteModel
+languageModel inp cursor hist executables = case parsed of
+    Just ("", ProgramCall e a)  -> pure ([], []) -- good luck for god has long abandoned you.
+    Nothing  -> pure ([], [])
+  where
+    parsed = runParser parseExpr inp
+    (matchIndex, cursorIndex) = extractIndexes inp cursor-}
+-- guides of the forever rotten:
+-- make a recursive function calculating length of all words dependent on the node.
+-- make whitespace a passed list probably idfk really
+-- it's gonna work trust me brutha
+
+-- once you figure that out a hook is gonna be easy trust be brotha
+
+
 
 -- stop using fstWord == curWord you fucking piece of shit it makes the thing break when `command command`
 
@@ -77,11 +95,58 @@ extractIndexes text cursor = case f cursor (T.reverse text) of
 
 -- when cursorIndex == matchedLength, redraw entire prompt
 
+
+languageHook :: T.Text -> Int -> ColorScheme -> ([T.Text], [T.Text]) -> IO ()
+languageHook input cursor cscheme model = unless (T.null input) $
+  bool
+    afterCursor -- redraw only right, as you're within a word so now quirky stuff
+    whole       -- redraw everything, as you're jumping between words.
+    (isNothing matchIndex)
+  where
+    (matchIndex, cursorIndex) = extractIndexes input cursor
+
+    afterCursor, whole :: IO ()
+
+    curWord = matchIndex <&> (reverse (T.words input)!!)
+
+    whitespace = segmentWhiteSpace input
+    whitespace' = case matchIndex of 
+      Just x  -> reverse $ take x $ reverse $ segmentWhiteSpace input
+      Nothing -> []
+    whole = resetCursor input cursor >> eraseRight >> langAsAnsi input whitespace cscheme cursor >>= putStrf
+    afterCursor = toCurWordStart >> eraseRight >> displayCurrent >> displayPrediction >> putStrf right >> retrieveCursor >> retrievePrediction
+
+    -- TODO: add `langAsAnsi` contextual modes {Executable, Argument}
+
+    displayCurrent = for_ curWord (\x -> langAsAnsi x whitespace' cscheme cursor >>= putStrf)
+
+    pred = case fst model of 
+      (x:_) -> curWord >>= (`T.stripPrefix` x)
+      [] -> Nothing
+    --displayPrediction = putStrf pred
+    (displayPrediction, retrievePrediction) = case pred of 
+      Just p -> (shadowText cscheme >>= putStrf . (<>p<>"\ESC[0m") . asciiColor, when (T.length p>0) $ moveCursor DLeft $ T.length p)
+      Nothing -> (pure (), pure ())
+    retrieveCursor = when (r > 0) $ moveCursor DLeft r where r = cursor
+
+    right = T.reverse $ T.take (cursor - T.length curWordRight) $ T.reverse input
+    (curWordLeft, curWordRight) = case (curWord, cursorIndex) of
+      (Just x, Just y) -> (T.take (T.length x - y) x, T.reverse $ T.take y $ T.reverse x)
+      _ -> ("", "")
+
+    toCurWordStart = bool (pure ()) (moveCursor DLeft (T.length curWordLeft)) (T.length curWordLeft > 0)
+
+resetCursor :: T.Text -> Int -> IO ()
+resetCursor t i = when (T.length t > i) $ moveCursor DLeft (T.length t - i)
+
+eraseRight :: IO ()
+eraseRight = putStrf "\ESC[0K"
+
 defaultHook :: T.Text -> Int -> ColorScheme -> ([T.Text], [T.Text]) -> IO ()
 defaultHook t i c m = unless (T.null t) $
     bool
-      ({-when (i >= T.length t - T.length fstWord) re-add I thibk-}resetCursor>> displayExecutable >> moveToCursor >> toEOW >> displayPrediction >> displayRight >> retrieveRight >> retrievePrediction >> fromEOW)
-      ({-traceShow ("left: `" <> left <> "`:" <> "right: `" <> right <> "`:") $ -}resetCursor >> putStrf "\ESC[0K" >> displayExecutable >> displayLeft >> displayCurrent >> displayPrediction >> displayRight >> retrieveCursor >> retrievePrediction)
+      ({-when (i >= T.length t - T.length fstWord) re-add I thibk-}resetCursor t i >> displayExecutable >> moveToCursor >> toEOW >> displayPrediction >> displayRight >> retrieveRight >> retrievePrediction >> fromEOW)
+      (resetCursor t i>> eraseRight >> displayExecutable >> displayLeft >> displayCurrent >> displayPrediction >> displayRight >> retrieveCursor >> retrievePrediction)
       (isNothing matchIndex)
   where
     fstWord = head $ T.words t
@@ -121,9 +186,6 @@ defaultHook t i c m = unless (T.null t) $
     displayRight = putStrf right
     retrieveRight = when (T.length right>0) $ moveCursor DLeft $ T.length right
     rest = fromMaybe "" $ T.stripPrefix fstWord $ T.stripStart t
-    
-    resetCursor = when (T.length t > i) $ moveCursor DLeft (T.length t - i)
-
     retrieveCursor = when (r > 0) $ moveCursor DLeft r where r = i
 
 
@@ -153,3 +215,11 @@ countLeadingWhitespace t
       | not (isSpace $ T.head t) = 0
       | isSpace (T.head t) = countLeadingWhitespace (T.tail t) + 1
       | otherwise = 0
+
+
+segmentWhiteSpace :: T.Text -> [T.Text]
+segmentWhiteSpace t
+      | T.null t = []
+      | isSpace (T.head t) = (T.pack [' ' | _<-[1..T.length t - T.length t2]]):segmentWhiteSpace t2 
+      | otherwise = segmentWhiteSpace $ T.dropWhile (/=' ') t
+      where t2 = T.dropWhile (==' ') t
