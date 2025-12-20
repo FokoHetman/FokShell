@@ -28,6 +28,11 @@ eputStrf t = t >>= \x -> T.putStr x <> hFlush stdout
 putStrf :: T.Text -> IO ()
 putStrf t = putStr (T.unpack t) <> hFlush stdout
 
+putStrf' :: String -> IO ()
+putStrf' t = putStr t <> hFlush stdout
+
+
+
 differ :: T.Text -> T.Text -> T.Text
 differ t1 t2
   | T.null t1 = t2

@@ -17,16 +17,16 @@ import Data.Char (isSpace)
 import Data.Bool (bool)
 import Control.Arrow (Arrow(first))
 import Data.Foldable (for_)
-import Data.List (isPrefixOf)
+import Data.List (isPrefixOf, intersect, intersperse)
 
 import Language.Parser
 
 {- input -> cursor location -> history -> most related autocompletes in form of (CurrentWord, WholeQuery) -}
-type AutocompleteModel = T.Text -> Int -> [T.Text] -> [T.Text] -> IO ([T.Text], [T.Text])
+type AutocompleteModel = AutocompleteModelData -> IO ([T.Text], [T.Text])
 {- todo: make input a Record, consolidate last 2 args into passing Caches -}
 
 defaultModel :: AutocompleteModel
-defaultModel inp cursor hist executables = if isMatchingExecutable then do
+defaultModel modelData = if isMatchingExecutable then do
     let matches = filter (T.isPrefixOf fstWord) executables
     pure (matches, wholeMatches)
   else do
@@ -50,6 +50,11 @@ defaultModel inp cursor hist executables = if isMatchingExecutable then do
     else
       pure ([], [])
   where
+    inp = modelInput modelData
+    cursor = cursorLocation modelData
+    hist = historyL modelData
+    executables = builtinNames modelData ++ executableList modelData
+
     pathExecutables = mapM executablesInDir =<< getDirsInPath
 
     (matchIndex, cursorIndex) = extractIndexes inp cursor
@@ -95,14 +100,31 @@ extractIndexes text cursor = case f cursor (T.reverse text) of
 
 -- when cursorIndex == matchedLength, redraw entire prompt
 
+data AutocompleteModelData = AutocompleteModelData {
+    modelInput      :: T.Text
+  , cursorLocation  :: Int
+  , aColorScheme    :: ColorScheme
+  , modelOutput     :: ([T.Text], [T.Text])
+  , builtinNames    :: [T.Text]
+  , executableList  :: [T.Text]
+  , historyL        :: [T.Text]
+  , mCompletionRules:: [CompletionRule]
+}
 
-languageHook :: T.Text -> Int -> ColorScheme -> ([T.Text], [T.Text]) -> IO ()
-languageHook input cursor cscheme model = unless (T.null input) $
+languageHook :: AutocompleteModelData -> IO ()
+languageHook modelData = unless (T.null input) $
   bool
     afterCursor -- redraw only right, as you're within a word so now quirky stuff
     whole       -- redraw everything, as you're jumping between words.
     (isNothing matchIndex)
   where
+    input = modelInput modelData 
+    cursor = cursorLocation modelData
+    cscheme = aColorScheme modelData
+    model = modelOutput modelData
+    executables = executableList modelData ++ builtinNames modelData
+    rules = mCompletionRules modelData
+
     (matchIndex, cursorIndex) = extractIndexes input cursor
 
     afterCursor, whole :: IO ()
@@ -113,12 +135,20 @@ languageHook input cursor cscheme model = unless (T.null input) $
     whitespace' = case matchIndex of 
       Just x  -> reverse $ take x $ reverse $ segmentWhiteSpace input
       Nothing -> []
-    whole = resetCursor input cursor >> eraseRight >> langAsAnsi input whitespace cscheme cursor >>= putStrf
-    afterCursor = toCurWordStart >> eraseRight >> displayCurrent >> displayPrediction >> putStrf right >> retrieveCursor >> retrievePrediction
+    whole = resetCursor input cursor >> eraseRight >> (wholeAnsi >>= putStrf) >> retrieveCursor
+    afterCursor = toCurWordStart >> eraseRight >> (rightAnsi >>= \x -> putStrf x) >> retrieveCursor >> retrievePrediction
 
     -- TODO: add `langAsAnsi` contextual modes {Executable, Argument}
 
-    displayCurrent = for_ curWord (\x -> langAsAnsi x whitespace' cscheme cursor >>= putStrf)
+    wholeAnsi = langAsAnsi rules input whitespace cscheme cursor executables
+
+    rightAnsi = shadowText cscheme >>= (\stext -> wholeAnsi <&> T.concat . fmap (uncurry (<>)) . zip ("":whitespace') . addPrediction stext . (reverse . take (length $ T.words right) . reverse . T.words))
+
+    addPrediction stext (x:xs)= case pred of
+      Just y  -> (x<>asciiColor stext<>y<>"\ESC[0m"):xs
+      Nothing -> x:xs
+
+    --displayCurrent = for_ curWord (\x -> langAsAnsi x whitespace' cscheme cursor executables >>= putStrf)
 
     pred = case fst model of 
       (x:_) -> curWord >>= (`T.stripPrefix` x)
@@ -129,7 +159,7 @@ languageHook input cursor cscheme model = unless (T.null input) $
       Nothing -> (pure (), pure ())
     retrieveCursor = when (r > 0) $ moveCursor DLeft r where r = cursor
 
-    right = T.reverse $ T.take (cursor - T.length curWordRight) $ T.reverse input
+    right = T.reverse $ T.take (cursor + T.length curWordLeft) $ T.reverse input
     (curWordLeft, curWordRight) = case (curWord, cursorIndex) of
       (Just x, Just y) -> (T.take (T.length x - y) x, T.reverse $ T.take y $ T.reverse x)
       _ -> ("", "")
@@ -142,13 +172,17 @@ resetCursor t i = when (T.length t > i) $ moveCursor DLeft (T.length t - i)
 eraseRight :: IO ()
 eraseRight = putStrf "\ESC[0K"
 
-defaultHook :: T.Text -> Int -> ColorScheme -> ([T.Text], [T.Text]) -> IO ()
-defaultHook t i c m = unless (T.null t) $
+defaultHook :: AutocompleteModelData -> IO ()
+defaultHook modelData = unless (T.null t) $
     bool
       ({-when (i >= T.length t - T.length fstWord) re-add I thibk-}resetCursor t i >> displayExecutable >> moveToCursor >> toEOW >> displayPrediction >> displayRight >> retrieveRight >> retrievePrediction >> fromEOW)
       (resetCursor t i>> eraseRight >> displayExecutable >> displayLeft >> displayCurrent >> displayPrediction >> displayRight >> retrieveCursor >> retrievePrediction)
       (isNothing matchIndex)
   where
+    t = modelInput modelData
+    i = cursorLocation modelData
+    c = aColorScheme modelData
+    m = modelOutput modelData
     fstWord = head $ T.words t
 
     {-toEOW = when (cursorIndex > 0) $ 
@@ -197,7 +231,7 @@ defaultHook t i c m = unless (T.null t) $
 
 data AutocompleteConfig = AutocompleteConfig {
     model     :: AutocompleteModel
-  , redrawHook:: T.Text -> Int -> ColorScheme -> ([T.Text], [T.Text]) -> IO ()
+  , redrawHook:: AutocompleteModelData -> IO ()
   }
 
 instance Def AutocompleteConfig where

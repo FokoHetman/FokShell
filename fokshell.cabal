@@ -85,6 +85,7 @@ library
                     , process
                     , unix
                     , hostname
+                    , system-fileio
 
     -- Directories containing source files.
     hs-source-dirs:   src

@@ -25,7 +25,7 @@ import ExposedTypes
 import Lib.Format
 
 import Debug.Trace (traceShow, trace)
-import Lib.Autocomplete (AutocompleteConfig(redrawHook, model), extractIndexes)
+import Lib.Autocomplete
 import Data.List (singleton)
 
 import Lib.Primitive
@@ -109,7 +109,7 @@ parseEvent proc key = do
               Just (i, r) -> let j = max 0 (i-1) in conf {historyIndex = Just (j, r), input = history conf!!j}
             )
 
-    (KeyModifiers 0, Tab) -> bool (pure proc) (model (autocomplete conf) (input conf) (cursorLoc conf) (history conf) executablelist >>= (\case
+    (KeyModifiers 0, Tab) -> bool (pure proc) (model (autocomplete conf) (mdata conf) >>= (\case
           [] -> pure proc
           [x]-> (putStr . T.unpack) (differ (curWord conf) x) >> hFlush stdout $> proc {shellConfig = replaceCurrent x conf}
           (x:xs)  -> pure proc
@@ -147,6 +147,7 @@ parseEvent proc key = do
         right = T.reverse $ T.take loc $ T.reverse inp
         left  = T.take (T.length inp - T.length right) inp
         nconf = conf { input = T.concat [left, T.drop 1 right], cursorLoc = max 0 $ loc - 1}
+    (_, Character "\NUL") -> pure proc
     (KeyModifiers 0, Character rawKey) -> do
       putStr $ T.unpack rawKey
       hFlush stdout
@@ -159,6 +160,9 @@ parseEvent proc key = do
   autocompleteOverrides out
   pure $ updateWithKey key out
   where
+    mdata c = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
+              historyL = history c, executableList = executablelist, builtinNames = fmap fst (builtins c), 
+              modelOutput = ([],[]), mCompletionRules = completionRules c}
 
 
     getIndexes c = extractIndexes (input c) (cursorLoc c)
@@ -202,5 +206,5 @@ parseEvent proc key = do
     executablelist :: [T.Text]
     executablelist = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache proc) "executables" >>= \x -> lookupCache x "execs")
 
-    autocompleteOverrides proc' = let c = shellConfig proc' in model (autocomplete c) (input c) (cursorLoc c) (history c) executablelist >>= redrawHook (autocomplete c) (input c) (cursorLoc c) (colorScheme c)
+    autocompleteOverrides proc' = let c = shellConfig proc' in model (autocomplete c) (mdata c) >>= \x -> redrawHook (autocomplete c) $ (mdata c) {modelOutput = x}
 

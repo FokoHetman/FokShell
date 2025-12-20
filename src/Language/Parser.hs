@@ -14,6 +14,7 @@ import System.Directory (findExecutable)
 import Debug.Trace (traceShow)
 import Control.Arrow (Arrow(second))
 import Data.Bool (bool)
+import Data.List (singleton)
 
 data PipeSyntax = {- > -} Write | {- >> -} Append | {- 2> -} WriteErr | {- 2>> -} AppendErr
   deriving (Show,Eq)
@@ -242,38 +243,60 @@ displayTask (PCall e a) = mapM complexToText a >>= \as -> complexToText e >>= \e
 
 
 
+data CompletionRule = CompRule T.Text (T.Text -> IO [CompletionRule])
 
+instance Show CompletionRule where
+  show (CompRule x f) = "CompRule `" ++ T.unpack x ++ "`"
+
+
+unwrapArgs :: CompletionRule -> [T.Text] -> IO [CompletionRule]
+unwrapArgs (CompRule _ f) [t] = f t
+unwrapArgs (CompRule _ f) (t:ts) = f t >>= \case
+    [CompRule x f2] -> if x==t then unwrapArgs (CompRule x f2) ts else pure []
+    _ -> pure []
 -- todo: add completions and file cache to this
-isValidArgument :: T.Text -> T.Text -> Bool
-isValidArgument prev arg = True
-  
+isValidArgument :: [CompletionRule] -> [T.Text] -> IO Bool
+isValidArgument rules (executable:args) = case lookup' executable rules of
+  Just (CompRule x f) -> unwrapArgs (CompRule x f) args <&> \case
+    [CompRule x2 _] -> x2==head (reverse args)
+    _   -> False
+  Nothing             -> pure True
+  where
+    lookup' :: T.Text -> [CompletionRule] -> Maybe CompletionRule
+    lookup' t (CompRule x f:xs) = bool (lookup' t xs) (Just $ CompRule x f) (t==x)
+    lookup' _ [] = Nothing
 
+
+-- STAMP
 
 -- ansi stuff
-langAsAnsi :: T.Text -> [T.Text] -> ColorScheme -> Int -> IO T.Text
-langAsAnsi t whitespace colorScheme cursor = case runParser parseExpr t of
+langAsAnsi :: [CompletionRule] -> T.Text -> [T.Text] -> ColorScheme -> Int -> [T.Text] -> IO T.Text
+langAsAnsi rules t whitespace colorScheme cursor executables = case runParser parseExpr t of
   Just (r, node) -> case node of
     (ProgramCall e a) -> do
       let exec = complexToRawText e
       let args = fmap complexToRawText a
       --zip wws args <- this is good I think
       --aargs <- 
-      (<>) <$> (formatted exec <&> (<>w)) <*> formatArgs exec args wws colorScheme
+      (<>) <$> (formatted exec <&> (<>w)) <*> formatArgs [exec] args wws colorScheme
       where
         formattedWord word e = (if e || T.null word then successColor colorScheme else errorColor colorScheme) <&> (<>word<>"\ESC[0m") . asciiColor
-        formatted exec = findExecutable (T.unpack exec) >>= formattedWord exec . isJust
-        (w:wws) = case whitespace of
-          [] -> [""]
-          x  -> x
+        formatted exec = findExecutable (T.unpack exec) >>= formattedWord exec . (|| exec `elem` executables) . isJust
+        (w:wws) = whitespace++[""]
 
         -- work on this (!!). It breaks on  `whole`. Figure out why.
-        formatArgs :: T.Text -> [T.Text] -> [T.Text] -> ColorScheme -> IO T.Text
+        formatArgs :: [T.Text] -> [T.Text] -> [T.Text] -> ColorScheme -> IO T.Text
+        --formatArgs executable arguments whitespace cscheme = (<>) 
         formatArgs t' (a':as) (w':ws') cs = (<>) <$> n <*> (nt >>= \x -> formatArgs x as ws' cs)
           where
-            n, nt :: IO T.Text
-            n = pure $ (<>bool "\ESC[4m" "" (isValidArgument t' a' )) (a' <>"\ESC[0m"<> w')
-            nt = n <&> (t'<>)
-        formatArgs _ [] _ _ = pure ""
+            n :: IO T.Text
+            nt :: IO [T.Text]
+            n = isValidArgument rules (t'++[a']) <&> (<>(a' <>"\ESC[0m"<> w')) . bool "\ESC[4m" ""
+            nt = n <&> (t'++) . singleton
+        formatArgs _ [] (w:ws) _ = pure w
+        formatArgs _ [] [] _ = pure ""
+        formatArgs _ x _ _ = pure ""
+        --formatArgs _ _  _ _ = pure ""
     {-(And a b) -> do
       a_u <- nodeAsText a
       b_u <- langAsAnsi b whitespace' colorScheme cursor

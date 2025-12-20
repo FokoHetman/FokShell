@@ -32,17 +32,18 @@ handleJob proc = do
 
   case task of
     -- overriding input here
-    Just t  -> displayTask t >>= print >> spawnJob conf { input="", cursorLoc=0 } (mkJob t Terminal Terminal Terminal) >>= \x -> pure proc {shellConfig = x}
+    Just t  -> displayTask t >>= print >> spawnJob (proc {shellConfig = conf { input="", cursorLoc=0 }}) (mkJob t Terminal Terminal Terminal)
     Nothing -> pure proc
 
 
 -- todo: check whether executable exists (configurable) before launching it.
-spawnJob :: ShellConfig -> Job -> IO ShellConfig
-spawnJob conf j = do
+spawnJob :: ShellProcess -> Job -> IO ShellProcess
+spawnJob proc' j = do
+  let conf = shellConfig proc'
   case task j of
     Task c b n sin sout serr -> do
       execute <- c $ exitCodeToInt $ last_ec j
-      evaluatedConf <- if execute then spawnJob conf $ mkJob b sin sout serr else undefined
+      evaluatedConf <- if execute then spawnJob proc' $ mkJob b sin sout serr else undefined
       case n of 
         Just n2 -> spawnJob evaluatedConf $ mkJob n2 sin sout serr -- or Terminal Terminal, idfk
         Nothing -> pure evaluatedConf
@@ -52,21 +53,25 @@ spawnJob conf j = do
       stdinr  <- getHandle pipeIn
       stderrr <- getHandle pipeErr
 
-      pname <- complexToText n <&> T.unpack
-      exists <- findExecutable pname <&> isJust
-      if not exists then putStrLn (pname ++ ": command not found") $> conf {- TODO: once exit statuses arive, return -1 here. -} else do
-        args  <- mapM complexToText a
-        (s_in,sout,serr,ph) <- createProcess (proc pname $ fmap T.unpack args)
-            {std_out = stdoutr, std_in = stdinr, std_err = stderrr}
-        let (JobMgr jobs) = jobManager conf
-        let newjob = j {stdinj = s_in, stdoutj = sout, stderrj = serr}
+      pname' <- complexToText n
+      let pname = T.unpack pname'
+      args  <- mapM complexToText a
+      case lookup pname' (builtins conf) of
+        Just x -> x args proc'
+        Nothing -> do
+          exists <- findExecutable pname <&> isJust
+          if not exists then putStrLn (pname ++ ": command not found") $> proc' {- TODO: once exit statuses arive, return -1 here. -} else do
+            (s_in,sout,serr,ph) <- createProcess (proc pname $ fmap T.unpack args)
+                {std_out = stdoutr, std_in = stdinr, std_err = stderrr}
+            let (JobMgr jobs) = jobManager conf
+            let newjob = j {stdinj = s_in, stdoutj = sout, stderrj = serr}
 
-        -- use process handle instead of pid in Job.
-        getPid ph >>= \case
-          Just p -> do
-            exitcode <- waitForProcess ph
-            pure conf {jobManager = JobMgr $ (newjob {pid = Just p, last_ec = exitcode}):jobs}
-          Nothing -> undefined -- undefined behavior. idk what to do when process has no id
+            -- use process handle instead of pid in Job.
+            getPid ph >>= \case
+              Just p -> do
+                exitcode <- waitForProcess ph
+                pure proc' {shellConfig = conf {jobManager = JobMgr $ (newjob {pid = Just p, last_ec = exitcode}):jobs}}
+              Nothing -> undefined -- undefined behavior. idk what to do when process has no id
   --(t', h) <- walkTask $ task j
   where
     getHandle :: (Job -> PipeType) -> IO StdStream

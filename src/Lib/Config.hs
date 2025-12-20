@@ -12,10 +12,10 @@ import Lib.Keys
 import Lib.Format
 import System.Process
 
-import System.Posix (fileExist, createFile, ownerWriteMode, ownerReadMode, closeFd)
-import System.Directory (getHomeDirectory)
+import System.Posix (fileExist, createFile, ownerWriteMode, ownerReadMode, closeFd, changeWorkingDirectory, getFileStatus, isDirectory)
+import System.Directory (getHomeDirectory, doesDirectoryExist, getPermissions, Permissions (readable), getDirectoryContents, doesFileExist)
 
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeDirectory)
 
 import Debug.Trace
 
@@ -26,7 +26,9 @@ import Language.Parser
 import GHC.IO.Exception (ExitCode)
 import Control.Monad
 import System.Exit (exitSuccess)
-
+import Data.List (sort, group, intersperse)
+import Control.Concurrent (threadDelay)
+import Data.Bool (bool)
 
 data Job = Job {
     pid     :: Maybe Pid
@@ -139,6 +141,118 @@ instance Def [(KeyEvent, Action)] where
       , ((control, Character "l"), \proc -> clearHook(hooks (shellConfig proc)) (proc {shellConfig = (shellConfig proc) {trigger=(control, Character "l")}}) >>= \x -> if x then clearAction proc else pure proc)
     ]
 
+type Builtin = (T.Text, [T.Text] -> Action)
+
+cd :: Builtin
+cd = ("cd", \args process -> do
+    _ <- case args of
+      [x] -> changeWorkingDirectory $ T.unpack x
+      _   -> pure ()
+    pure process-- replace getters with just a cached value that changes here?
+  )
+
+animateMovement :: [String] -> IO ()
+animateMovement x = putStrLn "" >> f x (length (head x))
+  where
+    f :: [String] -> Int -> IO ()
+    f x 0 = putStrf' ("\ESC[" ++ show (length x) ++ "B")
+    f x i = f' x i >> putStrf' ("\ESC[" ++ show (length x) ++ "A") >> threadDelay 50000 >> f x (i-1)
+    f' :: [String] -> Int -> IO ()
+    f' (x:xs) i = putStrLn (reverse $ take (length x - i) $ reverse x) >> f' xs i
+    f' [] _ = pure ()
+count :: Eq a => [a] -> a -> Int
+count xs find = length (filter (== find) xs)
+
+dedup :: Ord a => [a] -> [a]
+dedup = map head . group . sort
+
+wrapped :: Builtin
+wrapped = ("wrapped", \_ process -> do
+    let conf = shellConfig process
+    let hist = history conf
+    let mis_ls = count hist "sl"
+    let mis_nvim = sum $ fmap (count hist . T.pack) $ filter (/="nvim") $ dedup [a:b:c:[d] | a<-"nvim", b<-"nvim", c<-"nvim", d<-"nvim"]
+    
+    
+    animateMovement [
+        "\ESC" ++ concat (intersperse "*====" ["\ESC[38;5;" ++ show id ++ "m" | id<- [0..20]]) ++ "*\ESC[0m" --"*====*====*====*====*====*====*====*====*====*====*====*====*====*====*====*====*====*====*====*"
+      ,  "                                                          \ESC[1m==============*FokShell Wrapped*=====\ESC[0m"
+      ,  "                                      \ESC[1mMisspelled `ls` " ++ show mis_ls ++ " times\ESC[0m"
+      ,  "               \ESC[1mMisspelled `nvim` " ++ show mis_nvim ++ " times\ESC[0m"
+      , "\ESC" ++ concat (intersperse "*====" ["\ESC[38;5;" ++ show id ++ "m" | id<- [0..20]]) ++ "*\ESC[0m"
+      --, "*====*====*====*====*====*====*====*====*====*====*====*====*====*====*====*====*====*====*====*"
+      , "\xE001\xE002\xE003\xE004\xE005\xE006\xE007\xE008\xE009\xE00A\xE00B\xE00C\xE00D\xE00E\xE00F\xE010\xE011\xE012\xE013\xE014\xE015\xE016\xE017\xE018\xE019\xE01A\xE01B\xE01C\xE01D\xE01E\xE01F\xE020\xE021\xE022\xE023\xE024\xE025\xE026\xE027\xE028\xE029\xE02A\xE02B\xE02C\xE02D\xE02E\xE02F\xE030\xE031\xE032\xE033\xE034\xE035\xE036\xE037\xE038\xE039\xE03A\xE03B\xE03C\xE03D\xE03E\xE03F\xE040\xE041\xE042\xE043\xE044\xE045\xE046\xE047\xE048\xE049\xE04A\xE04B\xE04C\xE04D\xE04E\xE04F\xE050\xE051\xE052\xE053\xE054\xE055\xE056\xE057\xE058\xE059\xE05A\xE05B\xE05C\xE05D\xE05E\xE05F\xE060"
+      ]
+
+    pure process
+  )
+
+
+readHistory :: IO FilePath -> IO [T.Text]
+readHistory f2 = f2 >>= (\f -> fileExist f >>= \x -> unless x (void $ trace ("creating a history file: `" ++ f ++ "`") $ createFile f (ownerReadMode B..|. ownerWriteMode) >>= closeFd) >> TIO.readFile f <&> reverse . T.split (=='\n'))
+
+
+haltAction :: Action
+haltAction proc = let config = shellConfig proc in displayPrompt (prompt config  $ colorScheme config) $> proc {shellConfig = config {input = ""}}
+
+exitAction :: Action
+exitAction (ShellProcess {}) = exitSuccess
+
+-- BUG: it doesn't display the current input, making clear with prompt yield weird results
+clearAction :: Action
+clearAction proc = let config = shellConfig proc in putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt config $ colorScheme config) $> proc
+
+displayPrompt :: Prompt -> IO ()
+displayPrompt = \case 
+  SingleLine text _ -> eputStrf text
+  MultiLine text _  -> eputStrf $ text <&> T.intercalate "\n"
+
+
+
+{-
+nix :: CompletionRule
+nix = CompRule "nix" (\t -> pure $ filter (\(CompRule i _) -> t `T.isPrefixOf` i) [
+    CompRule "run" flake
+  ])
+  where
+    flake :: T.Text -> IO [CompletionRule]
+    flake t = case T.split (=='#') t of
+      [x] -> (++) <$> directoryRules <*> registries
+-}
+
+fileCompletion :: (FilePath -> IO Bool) -> (T.Text -> IO [CompletionRule]) -> (T.Text -> IO [CompletionRule])
+fileCompletion filtre nest t = do
+    let d = takeDirectory $ T.unpack t
+    exists <- doesDirectoryExist d
+    if exists then getPermissions d >>= \x ->
+      if readable x then do
+        localFiles <- getDirectoryContents d >>= filterM (filtre . (d</>))
+        let matches = filter (T.isPrefixOf t) $ bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` t) <$> fmap T.pack localFiles
+        pure $ fmap (`CompRule` nest) matches
+      else pure []
+    else pure []
+fileCompletionRec :: (FilePath -> IO Bool) -> T.Text -> IO [CompletionRule]
+fileCompletionRec filtr = fileCompletion filtr (fileCompletionRec filtr)
+
+cdCompletion :: CompletionRule
+cdCompletion = CompRule "cd" $ fileCompletion ((<&> isDirectory) . getFileStatus) $ const (pure [])
+
+fileListCompletion :: (FilePath -> IO Bool) -> T.Text -> CompletionRule
+fileListCompletion filtr = (`CompRule` fileCompletionRec filtr)
+
+instance Def [CompletionRule] where
+  def = [
+      --nix
+      cdCompletion
+    --, fileListCompletion (pure $ pure True) "mv"
+    --, fileListCompletion (pure $ pure True) "cp"
+    ]
+
+instance Def [Builtin] where
+  def = [
+      cd
+    , wrapped
+    ]
 
 data ShellConfig = ShellConfig
   { hooks       :: ShellHooks
@@ -159,29 +273,13 @@ data ShellConfig = ShellConfig
   , historyIndex:: Maybe (Int, T.Text)
   , getHistory  :: IO [T.Text]
   
-  , builtins    :: [(T.Text, Action)]
+  , builtins    :: [Builtin]
 
   , autocomplete:: AutocompleteConfig
   , cursorConfig:: CursorConfig
+
+  , completionRules :: [CompletionRule]
   }
-
-readHistory :: IO FilePath -> IO [T.Text]
-readHistory f2 = f2 >>= (\f -> fileExist f >>= \x -> unless x (void $ trace ("creating a history file: `" ++ f ++ "`") $ createFile f (ownerReadMode B..|. ownerWriteMode) >>= closeFd) >> TIO.readFile f <&> reverse . T.split (=='\n'))
-
-
-haltAction :: Action
-haltAction proc = let config = shellConfig proc in displayPrompt (prompt config  $ colorScheme config) $> proc {shellConfig = config {input = ""}}
-
-exitAction :: Action
-exitAction (ShellProcess {}) = exitSuccess
-
-clearAction :: Action
-clearAction proc = let config = shellConfig proc in putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt config $ colorScheme config) $> proc
-
-displayPrompt :: Prompt -> IO ()
-displayPrompt = \case 
-  SingleLine text _ -> eputStrf text
-  MultiLine text _  -> eputStrf $ text <&> T.intercalate "\n" 
 
 instance Def ShellConfig where
   def = ShellConfig
@@ -200,6 +298,11 @@ instance Def ShellConfig where
     , historyIndex = Nothing
     , getHistory = readHistory defaultHistoryFile
 
+    , builtins = def
+
     , autocomplete = def
     , cursorConfig = def
+    , completionRules = def
     }
+
+
