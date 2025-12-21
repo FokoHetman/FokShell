@@ -1,4 +1,10 @@
-* shell builtins
-* prompt customization
-* parser modularization
-* shell docks ("clippy", `ShellState ProcWrapper`)
+- [x] shell builtins
+- [x] prompt customization
+- [] Completions completion
+- [] fix clearing and other bugs
+- [] less weird caching or smth idk*
+- [] default completions
+- [] nix packaging
+- [] more language features, nodes etc
+- [] parser modularization
+- [] shell docks ("clippy", `ShellState ProcWrapper` (idk what this means))
