@@ -12,7 +12,7 @@ import Lib.Keys
 import Lib.Format
 import System.Process
 
-import System.Posix (fileExist, createFile, ownerWriteMode, ownerReadMode, closeFd, changeWorkingDirectory, getFileStatus, isDirectory)
+import System.Posix (fileExist, createFile, ownerWriteMode, ownerReadMode, closeFd, changeWorkingDirectory, getFileStatus, isDirectory, isRegularFile)
 import System.Directory (getHomeDirectory, doesDirectoryExist, getPermissions, Permissions (readable), getDirectoryContents, doesFileExist)
 
 import System.FilePath ((</>), takeDirectory)
@@ -244,8 +244,7 @@ instance Def [CompletionRule] where
   def = [
       --nix
       cdCompletion
-    --, fileListCompletion (pure $ pure True) "mv"
-    --, fileListCompletion (pure $ pure True) "cp"
+    , fileListCompletion ((<&> isRegularFile) . getFileStatus) "cat"
     ]
 
 instance Def [Builtin] where

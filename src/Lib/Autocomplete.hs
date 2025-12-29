@@ -7,19 +7,18 @@ import Lib.Format
 import Lib.ColorScheme
 import Data.Maybe (isJust, fromMaybe, isNothing)
 import Data.Functor
-import System.Directory (findExecutable, getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable, readable), doesDirectoryExist, canonicalizePath)
-import Control.Monad (when, liftM, filterM, join, unless)
-import System.Environment (getEnv)
-import Debug.Trace (traceShow)
+import System.Directory (findExecutable, getDirectoryContents, getPermissions, Permissions (readable), doesDirectoryExist)
+import Control.Monad (when, unless)
 
 import System.FilePath.Posix ((</>), takeDirectory)
 import Data.Char (isSpace)
 import Data.Bool (bool)
 import Control.Arrow (Arrow(first))
 import Data.Foldable (for_)
-import Data.List (isPrefixOf, intersect, intersperse)
+import Data.List (singleton)
 
 import Language.Parser
+import Debug.Trace (traceShow)
 
 {- input -> cursor location -> history -> most related autocompletes in form of (CurrentWord, WholeQuery) -}
 type AutocompleteModel = AutocompleteModelData -> IO ([T.Text], [T.Text])
@@ -66,24 +65,57 @@ defaultModel modelData = if isMatchingExecutable then do
 
     wholeMatches = filter (T.isPrefixOf inp) hist
 
--- theoritically that's not needed
-{-languageModel :: AutocompleteModel
-languageModel inp cursor hist executables = case parsed of
-    Just ("", ProgramCall e a)  -> pure ([], []) -- good luck for god has long abandoned you.
+
+findArg :: [T.Text] -> [T.Text] -> Int -> Maybe Int
+findArg (t:ts) (w:ws) i = bool (findArg ts ws (i-offset) <&> (+1)) (Just 0) (T.length t>=i)
+  where offset = T.length t + T.length w
+findArg (t:ts) [] i = bool Nothing (Just 0) (T.length t >= i)
+findArg _ _ _ = Nothing
+
+
+
+languageModel :: AutocompleteModel
+languageModel modelData = case parsed of
+    Just (_, n)  -> case n of
+      ProgramCall exec args -> bool
+        {-matching args-}
+        (argMatches <&> (,[]))
+        {-matching executable-}
+        (pure (executableMatches exec,[]))
+        (T.length exec' >= cursor)
+        where
+          exec' = complexToRawText exec
+          executableMatches e = case e of 
+            Basic b -> filter (T.isPrefixOf b) executables
+            Variant (v:vs) -> undefined
+            
+          rule = lookupRule exec' rules
+          curArg = findArg (concatMap (T.words . complexToRawText) args) (tail whitespace) (cursor - T.length (head whitespace) - T.length exec')
+          argMatches = case rule of
+            Just r -> case curArg of
+              Nothing -> pure []
+              Just x  -> fmap (\(CompRule e _) -> e) <$> nestNTimes r (fmap complexToRawText args) x
+            Nothing -> case curArg of 
+              Just arg -> fileMatches (args!!arg)
+              Nothing -> pure []
+      _ -> error "undefined behavior"
     Nothing  -> pure ([], [])
   where
+    inp = modelInput modelData
+    cursor = T.length inp - cursorLocation modelData
     parsed = runParser parseExpr inp
-    (matchIndex, cursorIndex) = extractIndexes inp cursor-}
--- guides of the forever rotten:
--- make a recursive function calculating length of all words dependent on the node.
--- make whitespace a passed list probably idfk really
--- it's gonna work trust me brutha
+    executables = builtinNames modelData ++ executableList modelData
+    rules = mCompletionRules modelData
 
--- once you figure that out a hook is gonna be easy trust be brotha
-
-
-
--- stop using fstWord == curWord you fucking piece of shit it makes the thing break when `command command`
+    whitespace = segmentWhiteSpace inp
+    
+    matchIndex' = matchIndex <&> ((length (T.words inp)-1)-)
+    (matchIndex, cursorIndex) = extractIndexes inp (cursorLocation modelData)
+    fileMatches e = ((&&) <$> doesDirectoryExist d <*> (getPermissions d <&> readable)) >>= 
+        bool (pure []) (getDirectoryContents d <&> filter (T.isPrefixOf exec) . (bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` exec) <$>) . fmap T.pack)
+      where 
+        exec = complexToRawText e
+        d = takeDirectory (T.unpack exec)
 
 extractIndexes text cursor = case f cursor (T.reverse text) of
       Nothing -> (Nothing, Nothing)
@@ -97,8 +129,6 @@ extractIndexes text cursor = case f cursor (T.reverse text) of
           | otherwise =  (T.stripPrefix (head $ T.words text) text) 
             >>= (\x -> (bool (f (cursor - T.length (head $ T.words text) - countLeadingWhitespace x) (T.strip x)) Nothing (countLeadingWhitespace x > cursor - T.length (head $ T.words text))))
             <&> first (1+)
-
--- when cursorIndex == matchedLength, redraw entire prompt
 
 data AutocompleteModelData = AutocompleteModelData {
     modelInput      :: T.Text
@@ -202,7 +232,6 @@ defaultHook modelData = unless (T.null t) $
     pred = case fst m of 
       (x:_) -> curWord >>= (`T.stripPrefix` x)
       [] -> Nothing
-    --displayPrediction = putStrf pred
     (displayPrediction, retrievePrediction) = case pred of 
       Just p -> (shadowText c >>= putStrf . (<>p<>"\ESC[0m") . asciiColor, when (T.length p>0) $ moveCursor DLeft $ T.length p)
       Nothing -> (pure (), pure ())
@@ -215,7 +244,6 @@ defaultHook modelData = unless (T.null t) $
     left = bool "" (unwrap $ T.stripPrefix fstWord $ T.take (T.length t - i - T.length curWordLeft) t) (T.length t > i)
     displayLeft = putStrf left
 
-    -- todo: strip if fstWord is the prefix
     right = bool r (unwrap $ T.stripPrefix fstWord r) (fstWord `T.isPrefixOf` r)  where r = T.reverse $ T.take (i - T.length curWordRight) $ T.reverse t
     displayRight = putStrf right
     retrieveRight = when (T.length right>0) $ moveCursor DLeft $ T.length right
@@ -226,7 +254,7 @@ defaultHook modelData = unless (T.null t) $
     formattedWord e = (if e || T.null fstWord then successColor c else errorColor c) <&> (<>fstWord<>"\ESC[0m") . asciiColor
     displayExecutable = (findExecutable (T.unpack fstWord) >>= formattedWord . isJust) >>= putStrf
 
-    moveToCursor = {-traceShow rest $ -}bool (when (T.length rest > i) $ moveCursor DRight (T.length rest - i)) (moveCursor DLeft (i - T.length rest)) (i > T.length rest) 
+    moveToCursor = bool (when (T.length rest > i) $ moveCursor DRight (T.length rest - i)) (moveCursor DLeft (i - T.length rest)) (i > T.length rest) 
 
 
 data AutocompleteConfig = AutocompleteConfig {
@@ -257,3 +285,45 @@ segmentWhiteSpace t
       | isSpace (T.head t) = (T.pack [' ' | _<-[1..T.length t - T.length t2]]):segmentWhiteSpace t2 
       | otherwise = segmentWhiteSpace $ T.dropWhile (/=' ') t
       where t2 = T.dropWhile (==' ') t
+
+
+-- ansi stuff
+langAsAnsi :: [CompletionRule] -> T.Text -> [T.Text] -> ColorScheme -> Int -> [T.Text] -> IO T.Text
+langAsAnsi rules t whitespace colorScheme cursor executables = case runParser parseExpr t of
+  Just (r, node) -> case node of
+    (ProgramCall e a) -> do
+      let exec = complexToRawText e
+      let args = fmap complexToRawText a
+      --zip wws args <- this is good I think
+      --aargs <- 
+      (<>) <$> (formatted exec <&> (<>w)) <*> formatArgs [exec] args wws colorScheme
+      where
+        formattedWord word e = (if e || T.null word then successColor colorScheme else errorColor colorScheme) <&> (<>word<>"\ESC[0m") . asciiColor
+        formatted exec = findExecutable (T.unpack exec) >>= formattedWord exec . (|| exec `elem` executables) . isJust
+        (w:wws) = whitespace++[""]
+
+        -- work on this (!!). It breaks on  `whole`. Figure out why.
+        formatArgs :: [T.Text] -> [T.Text] -> [T.Text] -> ColorScheme -> IO T.Text
+        --formatArgs executable arguments whitespace cscheme = (<>) 
+        formatArgs t' (a':as) (w':ws') cs = (<>) <$> n <*> (nt >>= \x -> formatArgs x as ws' cs)
+          where
+            n :: IO T.Text
+            nt :: IO [T.Text]
+            n = isValidArgument rules (t'++[a']) <&> (<>(a' <>"\ESC[0m"<> w')) . bool "\ESC[4m" ""
+            nt = n <&> (t'++) . singleton
+        formatArgs _ [] (w:ws) _ = pure w
+        formatArgs _ [] [] _ = pure ""
+        formatArgs _ x _ _ = pure ""
+        --formatArgs _ _  _ _ = pure ""
+    {-(And a b) -> do
+      a_u <- nodeAsText a
+      b_u <- langAsAnsi b whitespace' colorScheme cursor
+
+      pure $ a_u <> w1 <> "&&" <> w2 <> b_u
+      where
+        whitespace' = undefined
+        w1 = undefined
+        w2 = undefined-}
+    _ -> undefined
+  Nothing -> (\x y z -> x<>y<>z) <$> (err <&> asciiColor) <*> pure t <*> pure "\ESC[0m"
+    where err = errorColor colorScheme

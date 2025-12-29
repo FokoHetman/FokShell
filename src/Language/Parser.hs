@@ -23,6 +23,7 @@ data Node = ProgramCall Executable Args | And Node Node | Pipe PipeSyntax Node N
 
 newtype Parser a = Parser {runParser :: T.Text -> Maybe (T.Text, a)}
 
+
 instance Functor Parser where
   fmap f (Parser p) =
     Parser $ \input -> do
@@ -69,8 +70,8 @@ taskify (ProgramCall e a) = Just $ PCall e a
 taskify x = error $ "couldn't taskify: " ++ show x
 
 parseExpr, parseExpr', parseExpr'' :: Parser Node
-parseExpr = andand <|> pipe <|> parseExpr'
-parseExpr' = pcall
+parseExpr = andand <|> parseExpr'
+parseExpr' = pipe <|> parseExpr''
 parseExpr'' = pcall
 
 
@@ -96,8 +97,15 @@ pipe = f Write (charP '>')
 andand :: Parser Node
 andand = And <$> (parseExpr' <* ws <* stringP "&&" <* ws) <*> parseExpr
 
-ws :: Parser T.Text
-ws = spanP isSpace
+ws :: Parser (T.Text,Int)
+ws = spanPCount isSpace
+
+
+spanPCount :: (Char -> Bool) -> Parser (T.Text, Int)
+spanPCount f = Parser $ \i -> do
+  (rest, txt) <- runParser (spanP f) i
+  let n = T.length txt
+  Just (rest, (txt, n))
 
 sepBy :: Parser a
       -> Parser b
@@ -110,13 +118,13 @@ pcall = Parser f
   where
     f :: T.Text -> Maybe (T.Text, Node)
     f i = do
-      (i', mprogram) <- second capStr <$> runParser (ws *> extractUntil " &" <* charP ' ' <* ws) i
+      (i', mprogram) <- second capStr <$> runParser (ws *> extractUntil " &" <* ws) i
       (i'', margs) <- runParser args i'
       program <- mprogram
       _args <- sequence margs
       Just (i'', ProgramCall program _args)
 
-args :: Parser [Maybe StringComplex] = many (capStr <$> (ws *> extractUntil " &" <* charP ' ' <* ws))
+args :: Parser [Maybe StringComplex] = many (capStr <$> (ws *> extractUntil " &" <* ws))
 
 
 smallLift :: Maybe (a -> b) -> Maybe a -> Maybe b
@@ -173,7 +181,7 @@ charP :: Char -> Parser Char
 charP x = Parser f
   where
     f t
-      | t == T.empty = Just("", x)
+      | t == T.empty = Nothing
       | T.head t==x = Just (T.drop 1 t, x)
       | otherwise = Nothing
 
@@ -256,56 +264,20 @@ unwrapArgs (CompRule _ f) (t:ts) = f t >>= \case
     _ -> pure []
 -- todo: add completions and file cache to this
 isValidArgument :: [CompletionRule] -> [T.Text] -> IO Bool
-isValidArgument rules (executable:args) = case lookup' executable rules of
-  Just (CompRule x f) -> unwrapArgs (CompRule x f) args <&> \case
-    [CompRule x2 _] -> x2==head (reverse args)
+isValidArgument rules (executable:args') = case lookupRule executable rules of
+  Just (CompRule x f) -> unwrapArgs (CompRule x f) args' <&> \case
+    [CompRule x2 _] -> x2==last args'
     _   -> False
   Nothing             -> pure True
-  where
-    lookup' :: T.Text -> [CompletionRule] -> Maybe CompletionRule
-    lookup' t (CompRule x f:xs) = bool (lookup' t xs) (Just $ CompRule x f) (t==x)
-    lookup' _ [] = Nothing
+    
+lookupRule :: T.Text -> [CompletionRule] -> Maybe CompletionRule
+lookupRule t (CompRule x f:xs) = bool (lookupRule t xs) (Just $ CompRule x f) (t==x)
+lookupRule _ [] = Nothing
 
 
--- STAMP
+nestNTimes :: CompletionRule -> [T.Text] -> Int -> IO [CompletionRule]
+nestNTimes (CompRule _ f) (t:_) 0 = f t
+nestNTimes (CompRule _ f) (t:ts) n = f t >>= \case
+  [CompRule t2 f2] -> if t==t2 then nestNTimes (CompRule t2 f2) ts (n-1) else pure []
+  x -> pure []
 
--- ansi stuff
-langAsAnsi :: [CompletionRule] -> T.Text -> [T.Text] -> ColorScheme -> Int -> [T.Text] -> IO T.Text
-langAsAnsi rules t whitespace colorScheme cursor executables = case runParser parseExpr t of
-  Just (r, node) -> case node of
-    (ProgramCall e a) -> do
-      let exec = complexToRawText e
-      let args = fmap complexToRawText a
-      --zip wws args <- this is good I think
-      --aargs <- 
-      (<>) <$> (formatted exec <&> (<>w)) <*> formatArgs [exec] args wws colorScheme
-      where
-        formattedWord word e = (if e || T.null word then successColor colorScheme else errorColor colorScheme) <&> (<>word<>"\ESC[0m") . asciiColor
-        formatted exec = findExecutable (T.unpack exec) >>= formattedWord exec . (|| exec `elem` executables) . isJust
-        (w:wws) = whitespace++[""]
-
-        -- work on this (!!). It breaks on  `whole`. Figure out why.
-        formatArgs :: [T.Text] -> [T.Text] -> [T.Text] -> ColorScheme -> IO T.Text
-        --formatArgs executable arguments whitespace cscheme = (<>) 
-        formatArgs t' (a':as) (w':ws') cs = (<>) <$> n <*> (nt >>= \x -> formatArgs x as ws' cs)
-          where
-            n :: IO T.Text
-            nt :: IO [T.Text]
-            n = isValidArgument rules (t'++[a']) <&> (<>(a' <>"\ESC[0m"<> w')) . bool "\ESC[4m" ""
-            nt = n <&> (t'++) . singleton
-        formatArgs _ [] (w:ws) _ = pure w
-        formatArgs _ [] [] _ = pure ""
-        formatArgs _ x _ _ = pure ""
-        --formatArgs _ _  _ _ = pure ""
-    {-(And a b) -> do
-      a_u <- nodeAsText a
-      b_u <- langAsAnsi b whitespace' colorScheme cursor
-
-      pure $ a_u <> w1 <> "&&" <> w2 <> b_u
-      where
-        whitespace' = undefined
-        w1 = undefined
-        w2 = undefined-}
-    _ -> undefined
-  Nothing -> (\x y z -> x<>y<>z) <$> (err <&> asciiColor) <*> pure t <*> pure "\ESC[0m"
-    where err = errorColor colorScheme

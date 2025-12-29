@@ -18,7 +18,7 @@ import Control.Monad (when)
 import Data.Functor
 
 import Network.HostName
-import Lib.Autocomplete (AutocompleteConfig(AutocompleteConfig, redrawHook, model), languageHook, defaultModel)
+import Lib.Autocomplete (AutocompleteConfig(AutocompleteConfig, redrawHook, model), languageHook, defaultModel, languageModel)
 
 myHooks :: ShellHooks
 myHooks = def
@@ -93,11 +93,11 @@ main = do
     , colorScheme = myColorScheme
     , binds = def ++ [
       ((control, Character "t"), \proc -> 
-        let config = shellConfig proc in let conf = config {colorScheme = nextColorScheme (colorScheme config)} in redraw conf $> proc)
+        let config = shellConfig proc in let conf = config {colorScheme = nextColorScheme (colorScheme config)} in redraw conf $> proc {shellConfig = conf})
     ]
     , autocomplete = AutocompleteConfig {
       redrawHook = languageHook
-    , model = defaultModel
+    , model = languageModel
     }
     }
     where

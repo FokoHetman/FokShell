@@ -4,11 +4,9 @@ module FokShell where
 import InputHandling (nextEvent)
 
 import qualified Data.Text as T
-import System.Exit (exitSuccess, exitFailure)
+import System.Exit (exitSuccess)
 import Control.Monad (when, unless)
 import System.IO (hSetEcho, hSetBuffering, stdin, BufferMode (NoBuffering), hFlush, stdout)
-import System.Directory (getCurrentDirectory, getHomeDirectory)
-import System.Posix (getEffectiveUserName, getEnv)
 
 import Data.Functor
 
@@ -17,27 +15,18 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
 import Data.IORef (newIORef, IORef, writeIORef, readIORef)
 
-import Network.HostName
-
-
 import JobManager
 import ExposedTypes
 import Lib.Format
-
-import Debug.Trace (traceShow, trace)
 import Lib.Autocomplete
-import Data.List (singleton)
-
 import Lib.Primitive
+import Lib.Keys
+import Lib.Config
+
+
 import Data.Dynamic (fromDynamic, toDyn)
 import Data.Maybe (fromMaybe)
 import Data.Bool (bool)
-
-import Lib.Keys
-import Lib.Config
--- TODO:
--- handle printing prompt with input, cursor, etc
--- job mgr
 
 
 
@@ -111,8 +100,7 @@ parseEvent proc key = do
 
     (KeyModifiers 0, Tab) -> bool (pure proc) (model (autocomplete conf) (mdata conf) >>= (\case
           [] -> pure proc
-          [x]-> (putStr . T.unpack) (differ (curWord conf) x) >> hFlush stdout $> proc {shellConfig = replaceCurrent x conf}
-          (x:xs)  -> pure proc
+          (x:_)-> (putStr . T.unpack) (differ (curWord conf) x) >> hFlush stdout $> proc {shellConfig = replaceCurrent x conf}
         ) . fst) (cursorIndex conf == Just 0)
 
     (KeyModifiers 1 {-control-}, Arrow d) -> case d of
