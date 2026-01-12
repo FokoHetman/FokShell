@@ -216,6 +216,16 @@ complexToText (EnvVar t, (a,b)) = getEnv (T.unpack t) >>= \case
 complexToText (Variant ts, (a,b)) = mapM complexToText ts <&> (<>b) . (a<>) . T.unwords
 complexToText (Combination ts, (a,b)) = error $ show ts
 
+
+complexToText' :: StringComplex' -> IO T.Text
+complexToText' (Basic t) = pure t
+complexToText' (EnvVar t) = getEnv (T.unpack t) >>= \case
+                            Just x -> pure $ T.pack x
+                            Nothing -> pure ""
+complexToText' (Variant ts) = mapM complexToText ts <&> T.unwords
+complexToText' (Combination ts) = error $ show ts
+
+
 complexToRawText :: StringComplex -> T.Text
 complexToRawText (Basic t, (a,b)) = a<>t<>b
 complexToRawText (EnvVar t, (a,b)) = a<>"$"<>t<>b

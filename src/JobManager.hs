@@ -53,7 +53,7 @@ spawnJob proc' j = do
       stdinr  <- getHandle pipeIn
       stderrr <- getHandle pipeErr
 
-      pname' <- complexToText n
+      pname' <- complexToText' $ fst n
       let pname = T.unpack pname'
       args  <- mapM complexToText a
       case lookup pname' (builtins conf) of
