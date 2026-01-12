@@ -220,25 +220,9 @@ nix = CompRule "nix" (\t -> pure $ filter (\(CompRule i _) -> t `T.isPrefixOf` i
       [x] -> (++) <$> directoryRules <*> registries
 -}
 
-fileCompletion :: (FilePath -> IO Bool) -> (T.Text -> IO [CompletionRule]) -> (T.Text -> IO [CompletionRule])
-fileCompletion filtre nest t = do
-    let d = takeDirectory $ T.unpack t
-    exists <- doesDirectoryExist d
-    if exists then getPermissions d >>= \x ->
-      if readable x then do
-        localFiles <- getDirectoryContents d >>= filterM (filtre . (d</>))
-        let matches = filter (T.isPrefixOf t) $ bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` t) <$> fmap T.pack localFiles
-        pure $ fmap (`CompRule` nest) matches
-      else pure []
-    else pure []
-fileCompletionRec :: (FilePath -> IO Bool) -> T.Text -> IO [CompletionRule]
-fileCompletionRec filtr = fileCompletion filtr (fileCompletionRec filtr)
 
 cdCompletion :: CompletionRule
 cdCompletion = CompRule "cd" $ fileCompletion ((<&> isDirectory) . getFileStatus) $ const (pure [])
-
-fileListCompletion :: (FilePath -> IO Bool) -> T.Text -> CompletionRule
-fileListCompletion filtr = (`CompRule` fileCompletionRec filtr)
 
 instance Def [CompletionRule] where
   def = [

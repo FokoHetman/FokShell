@@ -10,11 +10,13 @@ import System.Posix (getEnv)
 
 import Lib.ColorScheme
 import Data.Maybe (isJust)
-import System.Directory (findExecutable)
+import System.Directory (findExecutable, doesDirectoryExist, getPermissions, Permissions (readable), getDirectoryContents)
 import Debug.Trace (traceShow)
 import Control.Arrow (Arrow(second))
 import Data.Bool (bool)
 import Data.List (singleton)
+import System.FilePath (takeDirectory, (</>))
+import Control.Monad (filterM)
 
 data PipeSyntax = {- > -} Write | {- >> -} Append | {- 2> -} WriteErr | {- 2>> -} AppendErr
   deriving (Show,Eq)
@@ -79,7 +81,7 @@ parseExpr'' = pcall
 
 -- blockers are chars that symbolize a beggining of a new NODE, such as AND (`&&`). docs/parsing:1.2
 blockers :: String
-blockers = " &2><|"
+blockers = " &><|"
 
 -- blockers that also block stringcomplex parsing
 stringblockers :: String
@@ -92,13 +94,13 @@ pipe = f Write (charP '>')
       <|> f WriteErr (stringP "2>")
       <|> f AppendErr (stringP "2>>")
   where
-    f sx ssx = Pipe sx <$> (parseExpr'' <* ws <* ssx <* ws) <*> parseExpr
+    f sx ssx = Pipe sx <$> (parseExpr'' <* ssx) <*> parseExpr
 
 andand :: Parser Node
-andand = And <$> (parseExpr' <* ws <* stringP "&&" <* ws) <*> parseExpr
+andand = And <$> (parseExpr' <* stringP "&&") <*> parseExpr
 
-ws :: Parser (T.Text,Int)
-ws = spanPCount isSpace
+ws :: Parser T.Text
+ws = spanP isSpace
 
 
 spanPCount :: (Char -> Bool) -> Parser (T.Text, Int)
@@ -118,13 +120,14 @@ pcall = Parser f
   where
     f :: T.Text -> Maybe (T.Text, Node)
     f i = do
-      (i', mprogram) <- second capStr <$> runParser (ws *> extractUntil " &" <* ws) i
-      (i'', margs) <- runParser args i'
-      program <- mprogram
-      _args <- sequence margs
+      (i', program) <- runParser stringify i--second capStr <$> runParser (extractUntil " &") i
+      (i'', _args) <- runParser args i'
+      --program <- mprogram
+      --_args <- sequence margs
       Just (i'', ProgramCall program _args)
 
-args :: Parser [Maybe StringComplex] = many (capStr <$> (ws *> extractUntil " &" <* ws))
+args :: Parser [StringComplex]
+args = many stringify
 
 
 smallLift :: Maybe (a -> b) -> Maybe a -> Maybe b
@@ -145,21 +148,22 @@ capStr t = f (runParser stringify t)
     f t = case t of
       Just ("", x) -> Just x
       Just (r,  x) -> capStr r >>= \case
-        Combination y -> Just $ Combination (x:y)
-        y             -> Just $ Combination [x, y]
+        (Combination y, ab) -> Just (Combination (x:y), ab)
+        y             -> Just (Combination [x, y], ("",""))
       Nothing -> Nothing --error "capStr died lmao"
 stringify :: Parser StringComplex
 stringify = basic <|> variant <|> envvar
 
+constructFrom t l c r = (t c, (l, r))
 
 envvar :: Parser StringComplex
-envvar = EnvVar <$> (ws *> charP '$' *> extractUntil stringblockers <* ws)
+envvar = constructFrom EnvVar <$> ws <*> (charP '$' *> extractUntil stringblockers) <*> ws
 
 basic :: Parser StringComplex
-basic = Basic <$> extractUntil stringblockers
+basic = constructFrom Basic <$> ws <*> extractUntil stringblockers <*> ws
 
 variant :: Parser StringComplex
-variant = Variant <$> (charP '{' *> ws *> variants <* ws <* charP '}')
+variant = constructFrom Variant <$> ws <*> (charP '{' *> variants <* charP '}') <*> ws
   where
     variants = sepBy (ws *> charP ',' <* ws) stringify
 
@@ -199,21 +203,30 @@ spanP f = Parser $ \input ->
 
 
 
-data StringComplex = Basic T.Text | EnvVar T.Text | Variant [StringComplex] | Combination [StringComplex]
+data StringComplex' = Basic T.Text | EnvVar T.Text | Variant [StringComplex] | Combination [StringComplex]
   deriving (Show,Eq)
 
+type StringComplex = (StringComplex', (T.Text, T.Text))
+
 complexToText :: StringComplex -> IO T.Text
-complexToText (Basic t) = pure t
-complexToText (EnvVar t) = getEnv (T.unpack t) >>= \case
-                            Just x -> pure $ T.pack x
-                            Nothing -> pure  T.empty
-complexToText (Variant ts) = mapM complexToText ts <&> T.unwords
-complexToText (Combination ts) = error $ show ts
+complexToText (Basic t, (a,b)) = pure $ a<>t<>b
+complexToText (EnvVar t, (a,b)) = getEnv (T.unpack t) >>= \case
+                            Just x -> pure $ a<>T.pack x<>b
+                            Nothing -> pure $ a<>b
+complexToText (Variant ts, (a,b)) = mapM complexToText ts <&> (<>b) . (a<>) . T.unwords
+complexToText (Combination ts, (a,b)) = error $ show ts
 
 complexToRawText :: StringComplex -> T.Text
-complexToRawText (Basic t) = t
-complexToRawText (EnvVar t) = "$" <> t
-complexToRawText (Variant ts) = "{" <> T.intercalate "," (fmap complexToRawText ts) <> "}"
+complexToRawText (Basic t, (a,b)) = a<>t<>b
+complexToRawText (EnvVar t, (a,b)) = a<>"$"<>t<>b
+complexToRawText (Variant ts, (a,b)) = a<>"{" <> T.intercalate "," (fmap complexToRawText ts) <> "}"<>b
+
+
+complexToRawText' :: StringComplex' -> T.Text
+complexToRawText' (Basic t) = t
+complexToRawText' (EnvVar t) = "$"<>t
+complexToRawText' (Variant ts) = "{" <> T.intercalate "," (fmap complexToRawText ts) <> "}"
+
 
 
 type Executable = StringComplex
@@ -269,7 +282,8 @@ isValidArgument rules (executable:args') = case lookupRule executable rules of
     [CompRule x2 _] -> x2==last args'
     _   -> False
   Nothing             -> pure True
-    
+isValidArgument _ [] = pure True
+
 lookupRule :: T.Text -> [CompletionRule] -> Maybe CompletionRule
 lookupRule t (CompRule x f:xs) = bool (lookupRule t xs) (Just $ CompRule x f) (t==x)
 lookupRule _ [] = Nothing
@@ -281,3 +295,22 @@ nestNTimes (CompRule _ f) (t:ts) n = f t >>= \case
   [CompRule t2 f2] -> if t==t2 then nestNTimes (CompRule t2 f2) ts (n-1) else pure []
   x -> pure []
 
+
+
+
+fileCompletion :: (FilePath -> IO Bool) -> (T.Text -> IO [CompletionRule]) -> (T.Text -> IO [CompletionRule])
+fileCompletion filtre nest t = do
+    let d = takeDirectory $ T.unpack t
+    exists <- doesDirectoryExist d
+    if exists then getPermissions d >>= \x ->
+      if readable x then do
+        localFiles <- getDirectoryContents d >>= filterM (filtre . (d</>))
+        let matches = filter (T.isPrefixOf t) $ bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` t) <$> fmap T.pack localFiles
+        pure $ fmap (`CompRule` nest) matches
+      else pure []
+    else pure []
+fileCompletionRec :: (FilePath -> IO Bool) -> T.Text -> IO [CompletionRule]
+fileCompletionRec filtr = fileCompletion filtr (fileCompletionRec filtr)
+
+fileListCompletion :: (FilePath -> IO Bool) -> T.Text -> CompletionRule
+fileListCompletion filtr = (`CompRule` fileCompletionRec filtr)
