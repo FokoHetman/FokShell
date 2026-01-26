@@ -6,7 +6,7 @@ import qualified Data.Text as T
 
 import System.Exit (ExitCode (ExitSuccess, ExitFailure))
 import Control.Monad (when, filterM)
-import System.Directory (getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable))
+import System.Directory (getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesFileExist)
 import System.Posix (getEnv)
 import System.FilePath (takeFileName)
 import Data.Dynamic (toDyn)
@@ -35,7 +35,7 @@ updatePath proc = do
     Just x -> pure x
     _ -> pure ""
   localFiles <- getDirectoryContents =<< getCurrentDirectory
-  localExecutables <- fmap ("./" <>) <$> filterM (fmap executable . getPermissions) localFiles
+  localExecutables <- fmap ("./" <>) <$> (filterM doesFileExist localFiles >>= filterM (fmap executable . getPermissions))
   pathExecs <- pathExecutables <&> fmap takeFileName . concat
   let envcache = Entry ("executables", Cache [Entry ("PATH", toDyn path), Entry ("execs", toDyn $ fmap T.pack $ pathExecs ++ localExecutables)])
 

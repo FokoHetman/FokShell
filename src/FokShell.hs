@@ -23,11 +23,11 @@ import Lib.Primitive
 import Lib.Keys
 import Lib.Config
 
-
 import Data.Dynamic (fromDynamic, toDyn)
 import Data.Maybe (fromMaybe)
 import Data.Bool (bool)
-
+import Language.Parser (Parser(runParser), parseExpr)
+import Debug.Trace (traceShow)
 
 
 handleSignal :: IORef ShellProcess -> MVar () -> IO ()
@@ -153,21 +153,23 @@ parseEvent proc key = do
               modelOutput = ([],[]), mCompletionRules = completionRules c}
 
 
-    getIndexes c = extractIndexes (input c) (cursorLoc c)
+    getIndexes c = extract' (input c) (cursorLoc c)
     cursorIndex c = snd $ getIndexes c
     matchIndex c = fst $ getIndexes c
-    curWord c = maybe "" (reverse (T.words $ input c)!!) (matchIndex c)
+    curWord c = fromMaybe "" $ case runParser parseExpr (input c) of
+      Just (_, n) -> case extract n (T.length (input c) - cursorLoc c) of
+        Just (i,cursor') -> Just $ trackword (track n i) cursor'
+        Nothing -> Nothing
+      Nothing -> Nothing
+    --curWord c = maybe "" (reverse (T.words $ input c)!!) (matchIndex c)
 
     replaceCurrent :: T.Text -> ShellConfig -> ShellConfig
     replaceCurrent with c = c {input = ninput}
       where
         t = input c
         i = cursorLoc c
-        (matchIndex, cursorIndex) = extractIndexes (input c) (cursorLoc c)
-        
-        curWord = matchIndex <&> (reverse (T.words t)!!)
-        (curWordLeft, curWordRight) = case (curWord, cursorIndex) of
-          (Just x, Just y) -> (T.take (T.length x - y) x, T.reverse $ T.take y $ T.reverse x)
+        (curWordLeft, curWordRight) = case (curWord c, cursorIndex c) of
+          (x, Just y) -> (T.take (T.length x - y) x, T.reverse $ T.take y $ T.reverse x)
           _ -> ("", "")
 
         left = bool "" (T.take (T.length t - i - T.length curWordLeft) t) (T.length t > i)
@@ -176,9 +178,9 @@ parseEvent proc key = do
         --ws = reverse $ T.words (input c)
         --new_ws = take (curWordI c - 1) ws ++ with:take (length ws - curWordI c - 1) ws
 
-    curWordI c = curWordI' (cursorLoc c) 0 $ T.words $ T.reverse (input c)
-    curWordI' i y (x:xs) = if T.length x > i then y else curWordI' (i-T.length x) (y+1) xs
-    curWordI' i y _ = y
+    --curWordI c = curWordI' (cursorLoc c) 0 $ T.words $ T.reverse (input c)
+    --curWordI' i y (x:xs) = if T.length x > i then y else curWordI' (i-T.length x) (y+1) xs
+    --curWordI' i y _ = y
    
     unwrapBind [x] defval = snd x defval
     unwrapBind [] defval = pure defval

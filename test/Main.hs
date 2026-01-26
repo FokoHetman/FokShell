@@ -18,7 +18,7 @@ import Control.Monad (when)
 import Data.Functor
 
 import Network.HostName
-import Lib.Autocomplete (AutocompleteConfig(AutocompleteConfig, redrawHook, model), languageHook, defaultModel, languageModel)
+import Lib.Autocomplete (AutocompleteConfig(AutocompleteConfig, redrawHook, model), languageHook, languageModel)
 
 myHooks :: ShellHooks
 myHooks = def

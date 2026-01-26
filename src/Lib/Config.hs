@@ -13,7 +13,7 @@ import Lib.Format
 import System.Process
 
 import System.Posix (fileExist, createFile, ownerWriteMode, ownerReadMode, closeFd, changeWorkingDirectory, getFileStatus, isDirectory, isRegularFile)
-import System.Directory (getHomeDirectory, doesDirectoryExist, getPermissions, Permissions (readable), getDirectoryContents, doesFileExist)
+import System.Directory (getHomeDirectory, doesDirectoryExist, getPermissions, Permissions (readable, executable, searchable), getDirectoryContents, doesFileExist, doesPathExist)
 
 import System.FilePath ((</>), takeDirectory)
 
@@ -146,8 +146,11 @@ type Builtin = (T.Text, [T.Text] -> Action)
 cd :: Builtin
 cd = ("cd", \args process -> do
     _ <- case args of
-      [x] -> changeWorkingDirectory $ T.unpack x
-      _   -> pure ()
+      [x] -> do
+        let d = T.unpack x
+        doesDirectoryExist d >>= bool (putStrf "cd: directory does not exist.\n") (getPermissions d >>= bool (putStrf "cd: no permissions.\n") (changeWorkingDirectory d) . searchable)
+      []  -> putStrf "cd: no arg provided.\n"
+      _   -> putStrf "cd: too many args provided.\n"
     pure process-- replace getters with just a cached value that changes here?
   )
 

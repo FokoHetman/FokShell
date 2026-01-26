@@ -8,15 +8,11 @@ import GHC.IO.IOMode
 import Data.Char (isSpace)
 import System.Posix (getEnv)
 
-import Lib.ColorScheme
-import Data.Maybe (isJust)
-import System.Directory (findExecutable, doesDirectoryExist, getPermissions, Permissions (readable), getDirectoryContents)
-import Debug.Trace (traceShow)
-import Control.Arrow (Arrow(second))
+import System.Directory (doesDirectoryExist, getPermissions, Permissions (readable), getDirectoryContents)
 import Data.Bool (bool)
-import Data.List (singleton)
 import System.FilePath (takeDirectory, (</>))
 import Control.Monad (filterM)
+import Data.List (intersperse)
 
 data PipeSyntax = {- > -} Write | {- >> -} Append | {- 2> -} WriteErr | {- 2>> -} AppendErr
   deriving (Show,Eq)
@@ -69,7 +65,6 @@ taskify (Pipe ps n1 n2) = (\x y -> Task {condition = \_ -> pure True {-probably 
     _      -> Terminal}
   ) <$> taskify n1 <*> nodeAsText n2
 taskify (ProgramCall e a) = Just $ PCall e a
-taskify x = error $ "couldn't taskify: " ++ show x
 
 parseExpr, parseExpr', parseExpr'' :: Parser Node
 parseExpr = andand <|> parseExpr'
@@ -121,13 +116,13 @@ pcall = Parser f
     f :: T.Text -> Maybe (T.Text, Node)
     f i = do
       (i', program) <- runParser stringify i--second capStr <$> runParser (extractUntil " &") i
-      (i'', _args) <- runParser args i'
+      (i'', _args) <- runParser extractArgs i'
       --program <- mprogram
       --_args <- sequence margs
       Just (i'', ProgramCall program _args)
 
-args :: Parser [StringComplex]
-args = many stringify
+extractArgs :: Parser [StringComplex]
+extractArgs = many stringify
 
 
 smallLift :: Maybe (a -> b) -> Maybe a -> Maybe b
@@ -142,7 +137,7 @@ smallLift _ _ = Nothing
 -}
 
 capStr :: T.Text -> Maybe StringComplex
-capStr t = f (runParser stringify t)
+capStr s = f (runParser stringify s)
   where 
     f :: Maybe (T.Text, StringComplex) -> Maybe StringComplex 
     f t = case t of
@@ -154,6 +149,7 @@ capStr t = f (runParser stringify t)
 stringify :: Parser StringComplex
 stringify = basic <|> variant <|> envvar
 
+constructFrom :: (t -> a1) -> a2 -> t -> b -> (a1, (a2, b))
 constructFrom t l c r = (t c, (l, r))
 
 envvar :: Parser StringComplex
@@ -214,7 +210,7 @@ complexToText (EnvVar t, (a,b)) = getEnv (T.unpack t) >>= \case
                             Just x -> pure $ a<>T.pack x<>b
                             Nothing -> pure $ a<>b
 complexToText (Variant ts, (a,b)) = mapM complexToText ts <&> (<>b) . (a<>) . T.unwords
-complexToText (Combination ts, (a,b)) = error $ show ts
+complexToText (Combination ts, (a,b)) = (\x -> a <> T.concat x <> b) <$> mapM complexToText ts
 
 
 complexToText' :: StringComplex' -> IO T.Text
@@ -223,20 +219,20 @@ complexToText' (EnvVar t) = getEnv (T.unpack t) >>= \case
                             Just x -> pure $ T.pack x
                             Nothing -> pure ""
 complexToText' (Variant ts) = mapM complexToText ts <&> T.unwords
-complexToText' (Combination ts) = error $ show ts
+complexToText' (Combination ts) = T.concat <$> mapM complexToText ts
 
 
 complexToRawText :: StringComplex -> T.Text
 complexToRawText (Basic t, (a,b)) = a<>t<>b
 complexToRawText (EnvVar t, (a,b)) = a<>"$"<>t<>b
 complexToRawText (Variant ts, (a,b)) = a<>"{" <> T.intercalate "," (fmap complexToRawText ts) <> "}"<>b
-
+complexToRawText (Combination ts, (a,b)) = a<> T.concat (fmap complexToRawText ts) <> b
 
 complexToRawText' :: StringComplex' -> T.Text
 complexToRawText' (Basic t) = t
 complexToRawText' (EnvVar t) = "$"<>t
 complexToRawText' (Variant ts) = "{" <> T.intercalate "," (fmap complexToRawText ts) <> "}"
-
+complexToRawText' (Combination ts) = T.concat (fmap complexToRawText ts)
 
 
 type Executable = StringComplex
@@ -259,16 +255,16 @@ data Task = Task {condition :: Condition, body :: Task, next :: Maybe Task, stdi
 
 instance Show Task where
   show (PCall _ a) = "`" ++ "hidden behind IO"{-T.unpack (complexToText e)-} ++ " [" ++ (T.unpack . T.unwords) (fmap (const "hidden behind IO") a) ++ "]`"
-  show (Task _ t n sin sout serr) = "{" ++ T.unpack (displayHide sin) ++ "}c -> " ++ show t ++ case n of
+  show (Task _ t n s_in s_out _s_err) = "{" ++ T.unpack (displayHide s_in) ++ "}c -> " ++ show t ++ case n of
     Just x -> "=>" ++ show x
     Nothing -> ""
-    ++ "-->" ++ T.unpack (displayHide sout)
+    ++ "-->" ++ T.unpack (displayHide s_out)
 
 displayTask :: Task -> IO T.Text
-displayTask (Task c t n sin out serr) = case n of 
+displayTask (Task _c t n s_in s_out _s_err) = case n of 
     Just x -> displayTask x >>= \y -> pure $ "=>" <> y
     Nothing -> pure "" 
-  >>= \x -> displayTask t >>= \t -> displayPipeType sin >>= \sin -> displayPipeType out >>= \sout -> pure $ T.concat ["{", sin, "}c->", t, x, "-->", sout
+  >>= \x -> displayTask t >>= \t2 -> displayPipeType s_in >>= \ss_in -> displayPipeType s_out >>= \sout -> pure $ T.concat ["{", ss_in, "}c->", t2, x, "-->", sout
   ]
 displayTask (PCall e a) = mapM complexToText a >>= \as -> complexToText e >>= \es -> pure $ T.concat ["`", es, " [", T.unwords as, "]`"]
 
@@ -277,7 +273,7 @@ displayTask (PCall e a) = mapM complexToText a >>= \as -> complexToText e >>= \e
 data CompletionRule = CompRule T.Text (T.Text -> IO [CompletionRule])
 
 instance Show CompletionRule where
-  show (CompRule x f) = "CompRule `" ++ T.unpack x ++ "`"
+  show (CompRule x _) = "CompRule `" ++ T.unpack x ++ "`"
 
 
 unwrapArgs :: CompletionRule -> [T.Text] -> IO [CompletionRule]
@@ -285,6 +281,7 @@ unwrapArgs (CompRule _ f) [t] = f t
 unwrapArgs (CompRule _ f) (t:ts) = f t >>= \case
     [CompRule x f2] -> if x==t then unwrapArgs (CompRule x f2) ts else pure []
     _ -> pure []
+unwrapArgs _ [] = pure []
 -- todo: add completions and file cache to this
 isValidArgument :: [CompletionRule] -> [T.Text] -> IO Bool
 isValidArgument rules (executable:args') = case lookupRule executable rules of
@@ -303,8 +300,8 @@ nestNTimes :: CompletionRule -> [T.Text] -> Int -> IO [CompletionRule]
 nestNTimes (CompRule _ f) (t:_) 0 = f t
 nestNTimes (CompRule _ f) (t:ts) n = f t >>= \case
   [CompRule t2 f2] -> if t==t2 then nestNTimes (CompRule t2 f2) ts (n-1) else pure []
-  x -> pure []
-
+  _ -> pure []
+nestNTimes _ [] _ = pure []
 
 
 
