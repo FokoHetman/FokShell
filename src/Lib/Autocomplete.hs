@@ -19,7 +19,7 @@ import Data.List (singleton)
 import Language.Parser
 import System.Environment (getEnv, lookupEnv)
 import Debug.Trace (traceShow)
-import Data.Bifunctor (Bifunctor(bimap))
+import Data.Bifunctor (Bifunctor(bimap, second))
 
 
 type AutocompleteModel = AutocompleteModelData -> IO ([T.Text], [T.Text])
@@ -148,7 +148,84 @@ data AutocompleteModelData = AutocompleteModelData {
   , mCompletionRules:: [CompletionRule]
 }
 
+-- (complex, (charindex, ~wordindex))
+findComplex :: [StringComplex] -> Int -> Int -> Maybe (StringComplex,(Int,Int))
+findComplex (s:ss) cursor padding = bool
+  Nothing
+  (bool
+    (second (second (+1)) <$> findComplex ss (cursor - T.length rawS - padding) padding)
+    (Just (s, (cursor,0)))
+    (T.length rawS >= cursor)
+  )
+  (cursor>=0)
+  where
+  rawS = complexToRawText s
+findComplex [] _ _ = Nothing
+
+
+currentComplex :: Node -> Int -> Maybe (StringComplex,(Int,Int))
+currentComplex (ProgramCall exec args) c = bool
+  (second (second (+1)) <$> findComplex args (c - T.length rawExec) 0)
+  (Just (exec,(c,0)))
+  (T.length rawExec >= c)
+  where
+  rawExec = complexToRawText exec
+
+currentNode :: Node -> Int -> Maybe (Node, Int)
+currentNode (ProgramCall e a) c = Just (ProgramCall e a, c)
+currentNode _ _ = error "todo"
+
+clear :: T.Text
+clear = "\ESC[0m"
+
+
+-- TODO: make it handle spaces properly (returning to words breaks cursor positioning)
+
 languageHook :: AutocompleteModelData -> IO ()
+languageHook mData = unless (T.null input) $
+  case masterNode >>= (`currentNode` cursor') of
+    Just (n, i) -> case currentComplex n i of
+      -- if currently a node is hovered on, redraw it and anything right of it
+      Just (complex,(char,index)) -> when (char>0) (moveCursor DLeft char) >> case complex of
+        (Basic basic, (a,b)) -> wordFormat basic index >>= \fmt -> shadowText cscheme >>= \s -> putStrf (a<>fmt<>basic<>asciiColor s<>prediction'<>clear<>b) >> when (cursor + T.length prediction'>0) (moveCursor DLeft (cursor + T.length prediction'))
+        (Variant vs, (a',b')) -> (mapM (\x -> let (x',(a,b)) = x in wordFormat (complexToRawText' x') index <&> (a<>) . (<>complexToRawText' x'<>clear<>b)) vs
+            >>= putStrf . ((a'<>"{")<>) . (<>("}"<>b')) . T.intercalate ",")
+          >> moveCursor DLeft (cursor + T.length prediction')
+      Nothing -> whole
+      where
+      wordFormat :: T.Text -> Int -> IO T.Text
+      wordFormat word index = bool
+        (case n of 
+          -- todo: stop hard coding \ESC[4m
+          ProgramCall e a -> isValidArgument rules (complexToRawText' (fst e):take (i+1) (fmap (\(c, _) -> complexToRawText' c) a)) >>= bool ((<>"\ESC[4m") . asciiColor <$> textColor cscheme) (asciiColor <$> textColor cscheme)
+          _ -> error "idk if I should actually handle this edge case"
+        )
+        (asciiColor <$> bool (errorColor cscheme) (successColor cscheme) (word `elem` executables))
+        (index == 0)
+      -- todo: stop hard coding the "fst" and make a configurable function taking history and execs instead
+      prediction' = fromMaybe "" prediction
+      prediction :: Maybe T.Text
+      prediction = case n of 
+        ProgramCall e _ -> case fst model of 
+          (x:_) -> complexToRawText' (fst e) `T.stripPrefix` x
+          [] -> Nothing
+    -- upon Nothing, redraw entire prompt
+    Nothing -> whole
+  where
+    input = modelInput mData
+    cursor = cursorLocation mData
+    cursor' = T.length input - cursor
+    executables = executableList mData ++ builtinNames mData
+    rules = mCompletionRules mData
+    cscheme = aColorScheme mData
+    model = modelOutput mData
+
+    whole = resetCursor input cursor >> eraseRight >> (langAsAnsi rules input cscheme cursor executables >>= putStrf) >> when (cursor > 0) (moveCursor DLeft cursor)
+
+    masterNode = snd <$> runParser parseExpr input
+
+
+{-languageHook :: AutocompleteModelData -> IO ()
 languageHook modelData = unless (T.null input) $
   bool
     afterCursor -- redraw only right, as you're within a word so now quirky stuff
@@ -167,11 +244,11 @@ languageHook modelData = unless (T.null input) $
 
     afterCursor, whole :: IO ()
 
-    curWord = case runParser parseExpr input of
-      Just (_, n) -> case extract n (T.length input - cursor) of
-        Just (i,c) -> Just $ trackword (track n i) c
-        Nothing -> Nothing
-      Nothing -> Nothing
+    (curWordIndex, curWord) = case runParser parseExpr input of
+      Just (_, n) -> case extract n cursor' of
+        Just (i,c) -> (Just i, Just $ trackword (track n i) c)
+        Nothing -> (Nothing, Nothing)
+      Nothing -> (Nothing, Nothing)
 
     whole = wholeAnsi >>= whole'
     whole' ansi = resetCursor input cursor >> eraseRight >> putStrf ansi >> retrieveCursor
@@ -185,28 +262,42 @@ languageHook modelData = unless (T.null input) $
         >> (((\x y z -> x<>y<>z) <$> (err <&> asciiColor) <*> pure input <*> pure "\ESC[0m") >>= whole')
         where err = errorColor cscheme
       Just (_, n) -> case n of
-        ProgramCall e a -> bool
-        -- ???
-          (case findArg a (cursor' - T.length (complexToRawText e)) of
-            Just (i,_) -> shadowText cscheme >>= \shadow -> isValidArgument rules (exec':take (i+1) (fmap (\(c, _) -> complexToRawText' c) a))
-                          >>= bool (putStrf $ sp1<>"\ESC[4m"<>w<>"\ESC[0m"<>sp2<>asciiColor shadow<>pred'<>"\ESC[0m") (putStrf $ sp1<>w<>sp2<>asciiColor shadow<>pred'<>"\ESC[0m")
-              where
-                pred' = fromMaybe "" prediction
-                (w,(sp1,sp2)) = first complexToRawText' (a!!i)
-            Nothing -> when (T.length curWordLeft > 0) (moveCursor DRight (T.length curWordLeft)) >> whole
-          )
-          ( executable' >>= (\x -> shadowText cscheme >>= putStrf . (\st -> x <> asciiColor st <> prediction'' <> "\ESC[0m" <> executableSpace' <> args')) )
-          (cursor' <= elen)
-          where
-            elen = T.length (complexToRawText' $ fst e)
-            exec' = fromJust curWord--complexToRawText' $ fst e
-            executable' = formatted exec'
-            executableSpace' = (snd . snd) e
-            prediction'' = fromMaybe "" prediction'
-            prediction' = case fst model of
-              (x:_) -> curWord >>= (`T.stripPrefix` x)
-              [] -> Nothing
-            args' = T.concat (fmap complexToRawText a)
+        ProgramCall e a -> case curWord of 
+          Just curword -> bool
+            (case findArg a (cursor' - T.length (complexToRawText e)) of
+              Just (i,_) -> shadowText cscheme >>= \shadow -> isValidArgument rules (curword:take (i+1) (fmap (\(c, _) -> complexToRawText' c) a))
+                    >>= bool (putStrf $ sp1<>"\ESC[4m"<>w<>"\ESC[0m"<>sp2<>asciiColor shadow<>pred'<>"\ESC[0m") (putStrf $ sp1<>w<>sp2<>asciiColor shadow<>pred'<>"\ESC[0m")
+                where
+                  pred' = fromMaybe "" prediction
+                  (w,(sp1,sp2)) = first complexToRawText' (a!!i)
+              Nothing -> when (T.length curWordLeft > 0) (moveCursor DRight (T.length curWordLeft)) >> whole
+            )
+            (case fst e of
+              Variant vs -> when (cursor' > 0) (case findArg' (\x -> x-1) vs (cursor'-1) of
+                Just (i,(c,t)) ->
+                  when (c>0) (moveCursor DLeft c) >> (shadowText cscheme >>= putStrf . (\st -> t <> asciiColor st <> predictionV' <> "\ESC[0m" <> space <> rest <> "}" <> executableSpace' <> args')) >> when (c>0) (moveCursor DRight c)
+                  where
+                  predictionV' = fromMaybe "" predictionV
+                  predictionV = case fst model of
+                    (x:_) -> t `T.stripPrefix` x
+                    [] -> Nothing
+                  space = (snd . snd) $ vs!!i
+                  rest = bool "" "," (length vs - i - 1 > 0) <> T.intercalate "," (complexToRawText <$> take (length vs - i - 1) (reverse vs))
+                Nothing -> pure ())
+              _ -> executable' >>= (\x -> shadowText cscheme >>= putStrf . (\st -> x <> asciiColor st <> prediction'' <> "\ESC[0m" <> executableSpace' <> args'))
+            )
+            (cursor' <= elen)
+            where
+              elen = T.length (complexToRawText' $ fst e)
+              executable' = formatted curword
+              executableSpace' = (snd . snd) e
+              prediction'' = fromMaybe "" prediction'
+              prediction' = case fst model of
+                (x:_) -> curword `T.stripPrefix` x
+                [] -> Nothing
+              args' = T.concat (fmap complexToRawText a)
+          Nothing -> pure ()
+          
         _ -> undefined
       where
         formattedWord word e = (if e || T.null word then successColor cscheme else errorColor cscheme) <&> (<>word<>"\ESC[0m") . asciiColor
@@ -226,7 +317,7 @@ languageHook modelData = unless (T.null input) $
       _ -> ("", "")
 
     toCurWordStart = bool (pure ()) (moveCursor DLeft (T.length curWordLeft)) (T.length curWordLeft > 0)
-
+-}
 resetCursor :: T.Text -> Int -> IO ()
 resetCursor t i = when (T.length t > i) $ moveCursor DLeft (T.length t - i)
 
