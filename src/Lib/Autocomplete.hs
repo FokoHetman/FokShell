@@ -17,7 +17,7 @@ import Control.Arrow (Arrow(first))
 import Data.List (singleton)
 
 import Language.Parser
-import System.Environment (getEnv, lookupEnv)
+import System.Environment (getEnv, lookupEnv, getEnvironment)
 import Debug.Trace (traceShow)
 import Data.Bifunctor (Bifunctor(bimap, second))
 
@@ -36,6 +36,7 @@ findArg' f ((str, (a, b)):ts) i = bool (first (+1) <$> findArg' f ts (f $ i - {-
         Just x -> Just $ snd x
         Nothing -> Nothing
       Combination _ -> error "idk bruv"
+      EnvVar _ -> undefined
       _ -> error "?"
 findArg' _ [] _ = Nothing
 
@@ -63,7 +64,9 @@ languageModel modelData = case parsed of
             Combination ts -> pure $ case findArg ts i of
               Just (_,(_,t))-> filter (T.isPrefixOf t) executables
               _         -> []
-            EnvVar a    -> getEnv (T.unpack a) <&> (`filter` executables) . T.isPrefixOf . T.pack
+            EnvVar a    -> lookupEnv (T.unpack a) <&> \case 
+              Just x -> ((`filter` executables) . T.isPrefixOf . T.pack) x
+              Nothing -> []
               
           rule = lookupRule exec' rules
           curArg = findArg args (cursor - T.length exec'')
@@ -164,12 +167,18 @@ findComplex [] _ _ = Nothing
 
 
 currentComplex :: Node -> Int -> Maybe (StringComplex,(Int,Int))
-currentComplex (ProgramCall exec args) c = bool
+currentComplex (ProgramCall (exec,(a,b)) args) c = bool
   (second (second (+1)) <$> findComplex args (c - T.length rawExec) 0)
-  (Just (exec,(c,0)))
+  (
+  bool 
+  Nothing
+  (Just ((exec,(a,b)),(c,0)))
+  (T.length a <= c && T.length rawExec' + T.length a >= c)
+  )
   (T.length rawExec >= c)
   where
-  rawExec = complexToRawText exec
+  rawExec = complexToRawText (exec,(a,b))
+  rawExec' = complexToRawText' exec
 
 currentNode :: Node -> Int -> Maybe (Node, Int)
 currentNode (ProgramCall e a) c = Just (ProgramCall e a, c)
@@ -181,26 +190,43 @@ clear = "\ESC[0m"
 
 -- TODO: make it handle spaces properly (returning to words breaks cursor positioning)
 
+-- kurwa mać japierdole nie wiem chyba trzeba matchować node'y i wyświetlać po kolei japierdole 
+-- ^ he's right btw
+-- TODO:
+-- fix args formatting like execs and other edge cases
+-- fix arg predictions not displaying
 languageHook :: AutocompleteModelData -> IO ()
 languageHook mData = unless (T.null input) $
-  case masterNode >>= (`currentNode` cursor') of
-    Just (n, i) -> case currentComplex n i of
-      -- if currently a node is hovered on, redraw it and anything right of it
+  case masterNode of
+    Just (ProgramCall (e,(a,b)) args) -> case currentComplex (fromJust masterNode) i of
       Just (complex,(char,index)) -> when (char>0) (moveCursor DLeft char) >> case complex of
-        (Basic basic, (a,b)) -> wordFormat basic index >>= \fmt -> shadowText cscheme >>= \s -> putStrf (a<>fmt<>basic<>asciiColor s<>prediction'<>clear<>b) >> when (cursor + T.length prediction'>0) (moveCursor DLeft (cursor + T.length prediction'))
-        (Variant vs, (a',b')) -> (mapM (\x -> let (x',(a,b)) = x in wordFormat (complexToRawText' x') index <&> (a<>) . (<>complexToRawText' x'<>clear<>b)) vs
-            >>= putStrf . ((a'<>"{")<>) . (<>("}"<>b')) . T.intercalate ",")
+        (Basic basic, (a,b)) -> args' >>= \args'' -> wordFormat basic index >>= \fmt -> shadowText cscheme >>= \s -> putStrf (a<>fmt<>basic<>asciiColor s<>prediction'<>clear<>b<>args'')
+            >> when (T.length basic + T.length a+ T.length b  - char + T.length prediction' + T.length rawargs>0) (moveCursor DLeft (T.length basic + T.length a + T.length b - char + T.length prediction' + T.length rawargs))
+        (Variant vs, (a',b')) -> args' >>= \args'' -> (mapM (\x -> let (x',(a,b)) = x in wordFormat (complexToRawText' x') index <&> (a<>) . (<>complexToRawText' x'<>clear<>b)) vs
+            >>= putStrf . ((a'<>"{")<>) . (<>("}"<>b'<>args'')) . T.intercalate ",")
           >> moveCursor DLeft (cursor + T.length prediction')
+        (EnvVar e, (a,b)) -> args' >>= \args'' -> (getEnvironment >>= wordFormat' e index . fmap (T.pack . fst))
+          >>= putStrf . (((a<>"$")<>e)<>) . (<>b<>args'')
+        _ -> error "no impl"
+        where
+        rawargs = T.concat (fmap complexToRawText (reverse $ take (length args - index) $ reverse args))
+        argst = fmap complexToRawText args
+        args' = formatArgs (bool (complexToRawText' e:take (index-1) argst) [complexToRawText' e] (index==0)) (reverse $ take (length args - index) $ reverse argst) (1+index)
+        formatArgs prev (n:ns) i = (\x y -> x<>n<>y) <$> wordFormat' n i [] <*> formatArgs (prev++[n]) ns (i+1)
+        formatArgs _ [] _ = pure ""
       Nothing -> whole
       where
-      wordFormat :: T.Text -> Int -> IO T.Text
-      wordFormat word index = bool
+      n = fromJust masterNode
+      i = cursor'
+      wordFormat x y = wordFormat' x y executables
+      wordFormat' :: T.Text -> Int -> [T.Text] -> IO T.Text
+      wordFormat' word index argvs = bool
         (case n of 
           -- todo: stop hard coding \ESC[4m
           ProgramCall e a -> isValidArgument rules (complexToRawText' (fst e):take (i+1) (fmap (\(c, _) -> complexToRawText' c) a)) >>= bool ((<>"\ESC[4m") . asciiColor <$> textColor cscheme) (asciiColor <$> textColor cscheme)
           _ -> error "idk if I should actually handle this edge case"
         )
-        (asciiColor <$> bool (errorColor cscheme) (successColor cscheme) (word `elem` executables))
+        (asciiColor <$> bool (errorColor cscheme) (successColor cscheme) (word `elem` argvs))
         (index == 0)
       -- todo: stop hard coding the "fst" and make a configurable function taking history and execs instead
       prediction' = fromMaybe "" prediction
@@ -209,6 +235,52 @@ languageHook mData = unless (T.null input) $
         ProgramCall e _ -> case fst model of 
           (x:_) -> complexToRawText' (fst e) `T.stripPrefix` x
           [] -> Nothing
+        _ -> Nothing
+    _ -> whole
+    where
+    input = modelInput mData
+    cursor = cursorLocation mData
+    cursor' = T.length input - cursor
+    executables = executableList mData ++ builtinNames mData
+    rules = mCompletionRules mData
+    cscheme = aColorScheme mData
+    model = modelOutput mData
+
+    whole = resetCursor input cursor >> eraseRight >> (langAsAnsi rules input cscheme cursor executables >>= putStrf) >> when (cursor > 0) (moveCursor DLeft cursor)
+    masterNode = snd <$> runParser parseExpr input
+{-languageHook mData = unless (T.null input) $
+  case masterNode >>= (`currentNode` cursor') of
+    Just (n, i) -> case currentComplex n i of
+      -- if currently a node is hovered on, redraw it and anything right of it
+      Just (complex,(char,index)) -> when (char>0) (moveCursor DLeft char) >> case complex of
+        (Basic basic, (a,b)) -> wordFormat basic index >>= \fmt -> shadowText cscheme >>= \s -> putStrf (a<>fmt<>basic<>asciiColor s<>prediction'<>clear<>b)
+            >> when (cursor + T.length prediction'>0) (moveCursor DLeft (cursor + T.length prediction'))
+        (Variant vs, (a',b')) -> (mapM (\x -> let (x',(a,b)) = x in wordFormat (complexToRawText' x') index <&> (a<>) . (<>complexToRawText' x'<>clear<>b)) vs
+            >>= putStrf . ((a'<>"{")<>) . (<>("}"<>b')) . T.intercalate ",")
+          >> moveCursor DLeft (cursor + T.length prediction')
+        (EnvVar e, (a,b)) -> (getEnvironment >>= wordFormat' e index . fmap (T.pack . fst))
+          >>= putStrf . (((a<>"$")<>e)<>) . (<>b)
+        _ -> error "no impl"
+      Nothing -> whole
+      where
+      wordFormat x y = wordFormat' x y executables
+      wordFormat' :: T.Text -> Int -> [T.Text] -> IO T.Text
+      wordFormat' word index argvs = bool
+        (case n of 
+          -- todo: stop hard coding \ESC[4m
+          ProgramCall e a -> isValidArgument rules (complexToRawText' (fst e):take (i+1) (fmap (\(c, _) -> complexToRawText' c) a)) >>= bool ((<>"\ESC[4m") . asciiColor <$> textColor cscheme) (asciiColor <$> textColor cscheme)
+          _ -> error "idk if I should actually handle this edge case"
+        )
+        (asciiColor <$> bool (errorColor cscheme) (successColor cscheme) (word `elem` argvs))
+        (index == 0)
+      -- todo: stop hard coding the "fst" and make a configurable function taking history and execs instead
+      prediction' = fromMaybe "" prediction
+      prediction :: Maybe T.Text
+      prediction = case n of 
+        ProgramCall e _ -> case fst model of 
+          (x:_) -> complexToRawText' (fst e) `T.stripPrefix` x
+          [] -> Nothing
+        _ -> Nothing
     -- upon Nothing, redraw entire prompt
     Nothing -> whole
   where
@@ -223,7 +295,7 @@ languageHook mData = unless (T.null input) $
     whole = resetCursor input cursor >> eraseRight >> (langAsAnsi rules input cscheme cursor executables >>= putStrf) >> when (cursor > 0) (moveCursor DLeft cursor)
 
     masterNode = snd <$> runParser parseExpr input
-
+-}
 
 {-languageHook :: AutocompleteModelData -> IO ()
 languageHook modelData = unless (T.null input) $
@@ -396,7 +468,7 @@ langAsAnsi rules t colorScheme cursor executables = case runParser parseExpr t o
                 Just (_,(c,x)) -> (x,c)
                 Nothing -> ("",cursor')
               _ -> undefined
-            n = isValidArgument rules (t'++[current]) <&> (lft<>) . (<>(complexToRawText' a' <>"\ESC[0m" <> rgt)) . bool "\ESC[4m" ""
+            n = textColor cs >>= \tc -> isValidArgument rules (t'++[current]) <&> (lft<>) . (<>(asciiColor tc<>complexToRawText' a' <>"\ESC[0m" <> rgt)) . bool "\ESC[4m" ""
             nt = n <&> (t'++) . singleton
         formatArgs _ [] _ _ = pure ""
         formatArgs' text prev args cs c = text >>= \x -> formatArgs (x:prev) args cs c

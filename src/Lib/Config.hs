@@ -196,7 +196,7 @@ readHistory f2 = f2 >>= (\f -> fileExist f >>= \x -> unless x (void $ trace ("cr
 
 
 haltAction :: Action
-haltAction proc = let config = shellConfig proc in displayPrompt (prompt config  $ colorScheme config) $> proc {shellConfig = config {input = ""}}
+haltAction proc = let config = shellConfig proc in displayPrompt (prompt config  $ colorScheme config) $> proc {shellConfig = config {input = "",cursorLoc=0}}
 
 exitAction :: Action
 exitAction (ShellProcess {}) = exitSuccess
