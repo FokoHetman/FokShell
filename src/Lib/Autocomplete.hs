@@ -200,11 +200,17 @@ languageHook mData = unless (T.null input) $
   case masterNode of
     Just (ProgramCall (e,(a,b)) args) -> case currentComplex (fromJust masterNode) i of
       Just (complex,(char,index)) -> when (char>0) (moveCursor DLeft char) >> case complex of
-        (Basic basic, (a,b)) -> args' >>= \args'' -> wordFormat basic index >>= \fmt -> shadowText cscheme >>= \s -> putStrf (a<>fmt<>basic<>asciiColor s<>prediction'<>clear<>b<>args'')
-            >> when (T.length basic + T.length a+ T.length b  - char + T.length prediction' + T.length rawargs>0) (moveCursor DLeft (T.length basic + T.length a + T.length b - char + T.length prediction' + T.length rawargs))
-        (Variant vs, (a',b')) -> args' >>= \args'' -> (mapM (\x -> let (x',(a,b)) = x in wordFormat (complexToRawText' x') index <&> (a<>) . (<>complexToRawText' x'<>clear<>b)) vs
+        (Basic basic, (a,b)) -> do 
+          args'' <- args'
+          fmt <- wordFormat basic index
+          s <- shadowText cscheme
+          putStrf (a<>fmt<>basic<>asciiColor s<>pred<>clear<>b<>args'') 
+            >> when (T.length basic + T.length a+ T.length b  - char + T.length pred + T.length rawargs>0) (moveCursor DLeft (T.length basic + T.length a + T.length b - char + T.length pred + T.length rawargs))
+          where
+            pred = prediction' basic
+        {-(Variant vs, (a',b')) -> args' >>= \args'' -> (mapM (\x -> let (x',(a,b)) = x in wordFormat (complexToRawText' x') index <&> (a<>) . (<>complexToRawText' x'<>clear<>b)) vs
             >>= putStrf . ((a'<>"{")<>) . (<>("}"<>b'<>args'')) . T.intercalate ",")
-          >> moveCursor DLeft (cursor + T.length prediction')
+          >> moveCursor DLeft (cursor + T.length $ prediction')-}
         (EnvVar e, (a,b)) -> args' >>= \args'' -> (getEnvironment >>= wordFormat' e index . fmap (T.pack . fst))
           >>= putStrf . (((a<>"$")<>e)<>) . (<>b<>args'')
         _ -> error "no impl"
@@ -229,11 +235,11 @@ languageHook mData = unless (T.null input) $
         (asciiColor <$> bool (errorColor cscheme) (successColor cscheme) (word `elem` argvs))
         (index == 0)
       -- todo: stop hard coding the "fst" and make a configurable function taking history and execs instead
-      prediction' = fromMaybe "" prediction
-      prediction :: Maybe T.Text
-      prediction = case n of 
-        ProgramCall e _ -> case fst model of 
-          (x:_) -> complexToRawText' (fst e) `T.stripPrefix` x
+      prediction' x = fromMaybe "" (prediction x)
+      prediction :: T.Text -> Maybe T.Text
+      prediction x = case n of 
+        ProgramCall _ _ -> case fst model of 
+          (s:_) -> x `T.stripPrefix` s
           [] -> Nothing
         _ -> Nothing
     _ -> whole
