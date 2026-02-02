@@ -42,6 +42,7 @@ findArg' _ [] _ = Nothing
 
 findArg = findArg' id
 
+findArgVariant vs i = findArg' (\x -> x-1) vs (i-1)
 
 languageModel :: AutocompleteModel
 languageModel modelData = case parsed of
@@ -58,7 +59,7 @@ languageModel modelData = case parsed of
           exec'' = complexToRawText exec
           executableMatches i e = case e of
             Basic b     -> pure $ filter (T.isPrefixOf b) executables
-            Variant vs  -> pure $ case findArg' (\x -> x-1) vs (i-1) of
+            Variant vs  -> pure $ case findArgVariant vs (i-1) of
               Just (_,(_,t))-> filter (T.isPrefixOf t) executables
               _         -> []
             Combination ts -> pure $ case findArg ts i of
@@ -89,14 +90,6 @@ languageModel modelData = case parsed of
         bool (pure []) (getDirectoryContents d <&> filter (T.isPrefixOf exec) . (bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` exec) <$>) . fmap T.pack)
       where 
         d = takeDirectory (T.unpack exec)
-
-{-
-extractIndexes :: Maybe (T.Text,Node) -> Int -> Maybe (Int, Int)
-extractIndexes (Just (_,n)) cursor' = case f cursor' (T.reverse text') of
-      Nothing -> (Nothing, Nothing)
-      Just (a,b) -> bool (Nothing, Nothing) (Just a, Just b) (a<length ( T.words text'))
-
-extractIndexes Nothing _ = Nothing-}
 
 
 track :: Node -> Int -> StringComplex'
@@ -195,22 +188,36 @@ clear = "\ESC[0m"
 -- TODO:
 -- fix args formatting like execs and other edge cases
 -- fix arg predictions not displaying
+
+at :: Int -> (a -> a) -> [a] -> [a]
+at _ _ [] = []
+at 0 f (x:xs) = f x:xs
+at i f (x:xs) = x: at (i-1) f xs
+
 languageHook :: AutocompleteModelData -> IO ()
 languageHook mData = unless (T.null input) $
   case masterNode of
     Just (ProgramCall (e,(a,b)) args) -> case currentComplex (fromJust masterNode) i of
       Just (complex,(char,index)) -> when (char>0) (moveCursor DLeft char) >> case complex of
-        (Basic basic, (a,b)) -> do 
+        (Basic basic', (a,b)) -> do 
           args'' <- args'
-          fmt <- wordFormat basic index
+          fmt <- wordFormat basic' index
           s <- shadowText cscheme
-          putStrf (a<>fmt<>basic<>asciiColor s<>pred<>clear<>b<>args'') 
-            >> when (T.length basic + T.length a+ T.length b  - char + T.length pred + T.length rawargs>0) (moveCursor DLeft (T.length basic + T.length a + T.length b - char + T.length pred + T.length rawargs))
+          putStrf (a<>fmt<>basic'<>asciiColor s<>predi<>clear<>b<>args'') 
+            >> when (T.length basic' + T.length a+ T.length b  - char + T.length predi + T.length rawargs>0) (moveCursor DLeft (T.length basic' + T.length a + T.length b - char + T.length predi + T.length rawargs))
           where
-            pred = prediction' basic
-        {-(Variant vs, (a',b')) -> args' >>= \args'' -> (mapM (\x -> let (x',(a,b)) = x in wordFormat (complexToRawText' x') index <&> (a<>) . (<>complexToRawText' x'<>clear<>b)) vs
-            >>= putStrf . ((a'<>"{")<>) . (<>("}"<>b'<>args'')) . T.intercalate ",")
-          >> moveCursor DLeft (cursor + T.length $ prediction')-}
+            predi = prediction' basic'
+        (Variant vs, (a',b')) -> do 
+          args'' <- args' 
+          s <- shadowText cscheme <&> asciiColor
+          vargs <- mapM (\x -> let (x',(a,b)) = x in wordFormat (complexToRawText' x') index <&> (a<>) . (<>complexToRawText' x'<>clear<>b)) vs
+          (putStrf . ((a'<>"{")<>) . (<>("}"<>b'<>args'')) . T.intercalate "," . at argindex (<>s<>predi<>clear)) vargs
+          moveCursor DLeft (cursor + T.length predi)
+          where
+            arg = findArgVariant vs (cursor' - bool (T.length (complexToRawText (e,(a,b)))) 0 (index==0) - T.length a')
+            (argindex,predi) = case arg of
+              Just (argi,(_,t)) -> (argi, prediction' t)
+              Nothing -> (0,"")
         (EnvVar e, (a,b)) -> args' >>= \args'' -> (getEnvironment >>= wordFormat' e index . fmap (T.pack . fst))
           >>= putStrf . (((a<>"$")<>e)<>) . (<>b<>args'')
         _ -> error "no impl"
