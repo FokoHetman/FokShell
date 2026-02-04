@@ -98,9 +98,6 @@ mkJob t i o e = Job {
   }
 
 mkTask :: T.Text -> Maybe Task
-mkTask t = do
-  (_, n) <- runParser parseExpr t
-  taskify n
-
+mkTask t = runParser parseExpr t >>= taskify . snd
 
 

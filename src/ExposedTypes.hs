@@ -6,7 +6,7 @@ import qualified Data.Text as T
 
 import System.Exit (ExitCode (ExitSuccess, ExitFailure))
 import Control.Monad (when, filterM)
-import System.Directory (getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesFileExist)
+import System.Directory (getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesFileExist, canonicalizePath)
 import System.Posix (getEnv)
 import System.FilePath (takeFileName)
 import Data.Dynamic (toDyn)
@@ -29,14 +29,17 @@ exitCodeToInt (ExitFailure c) = c
 updateCursorShape :: ShellConfig -> IO ()
 updateCursorShape = (\x -> putStr x <> hFlush stdout) . show . cursorShape . cursorConfig
 
+
+
+
 updatePath :: ShellProcess -> IO ShellProcess 
 updatePath proc = do
   path <- getEnv "PATH" >>= \case
     Just x -> pure x
     _ -> pure ""
   localFiles <- getDirectoryContents =<< getCurrentDirectory
-  localExecutables <- fmap ("./" <>) <$> (filterM doesFileExist localFiles >>= filterM (fmap executable . getPermissions))
-  pathExecs <- pathExecutables <&> fmap takeFileName . concat
+  localExecutables <- fmap ("./" <>) <$> (mapM canonicalizePath localFiles >>= filterM (fmap executable . getPermissions))
+  pathExecs <- (pathExecutables >>= mapM canonicalizePath . concat)  <&> fmap takeFileName
   let envcache = Entry ("executables", Cache [Entry ("PATH", toDyn path), Entry ("execs", toDyn $ fmap T.pack $ pathExecs ++ localExecutables)])
 
   pure proc {shellCache = Cache $ getCache (removeFromCache (shellCache proc) "executables") ++ [envcache]}

@@ -45,7 +45,7 @@ getDirsInPath :: IO [FilePath]
 getDirsInPath = filterM doesDirectoryExist . fmap T.unpack . T.split (==':') . T.pack =<< getEnv "PATH"
 
 executablesInDir :: FilePath -> IO [FilePath]
-executablesInDir t = getDirectoryContents t >>= mapM (pure . (t</>)) >>= mapM canonicalizePath >>= filterM (fmap executable . getPermissions . (t</>)) --filterM (fmap executable . getPermissions . (t</>))
+executablesInDir t = getDirectoryContents t >>= mapM (pure . (t</>)) >>= mapM canonicalizePath >>= filterM (fmap executable . getPermissions . (t</>))
 
 getFormattedDirectory :: IO T.Text
 getFormattedDirectory = do

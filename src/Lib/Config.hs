@@ -203,7 +203,7 @@ exitAction (ShellProcess {}) = exitSuccess
 
 -- BUG: it doesn't display the current input, making clear with prompt yield weird results
 clearAction :: Action
-clearAction proc = let config = shellConfig proc in putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt config $ colorScheme config) $> proc
+clearAction proc = let config = shellConfig proc; d = (T.length (input config) - cursorLoc config) in putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt config $ colorScheme config) >> when (d>0) (moveCursor DRight d) $> proc
 
 displayPrompt :: Prompt -> IO ()
 displayPrompt = \case 

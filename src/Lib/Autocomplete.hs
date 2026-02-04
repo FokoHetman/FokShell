@@ -177,9 +177,9 @@ currentNode :: Node -> Int -> Maybe (Node, Int)
 currentNode (ProgramCall e a) c = Just (ProgramCall e a, c)
 currentNode _ _ = error "todo"
 
-clear :: T.Text
+clear, clearRight :: T.Text
 clear = "\ESC[0m"
-
+clearRight = "\ESC[0K"
 
 -- TODO: make it handle spaces properly (returning to words breaks cursor positioning)
 
@@ -195,7 +195,7 @@ at 0 f (x:xs) = f x:xs
 at i f (x:xs) = x: at (i-1) f xs
 
 languageHook :: AutocompleteModelData -> IO ()
-languageHook mData = unless (T.null input) $
+languageHook mData = unless (T.null input || Just True/=(T.null <$> rest)) $
   case masterNode of
     Just (ProgramCall (e,(a,b)) args) -> case currentComplex (fromJust masterNode) i of
       Just (complex,(char,index)) -> when (char>0) (moveCursor DLeft char) >> case complex of
@@ -204,7 +204,9 @@ languageHook mData = unless (T.null input) $
           fmt <- wordFormat basic' index
           s <- shadowText cscheme
           putStrf (a<>fmt<>basic'<>asciiColor s<>predi<>clear<>b<>args'') 
-            >> when (T.length basic' + T.length a+ T.length b  - char + T.length predi + T.length rawargs>0) (moveCursor DLeft (T.length basic' + T.length a + T.length b - char + T.length predi + T.length rawargs))
+          putStrf clearRight
+          let d = T.length basic' + T.length a+ T.length b  - char + T.length predi + T.length rawargs
+          when (d>0) (moveCursor DLeft d)
           where
             predi = prediction' basic'
         (Variant vs, (a',b')) -> do 
@@ -212,6 +214,7 @@ languageHook mData = unless (T.null input) $
           s <- shadowText cscheme <&> asciiColor
           vargs <- mapM (\x -> let (x',(a,b)) = x in wordFormat (complexToRawText' x') index <&> (a<>) . (<>complexToRawText' x'<>clear<>b)) vs
           (putStrf . ((a'<>"{")<>) . (<>("}"<>b'<>args'')) . T.intercalate "," . at argindex (<>s<>predi<>clear)) vargs
+          putStrf clearRight
           moveCursor DLeft (cursor + T.length predi)
           where
             arg = findArgVariant vs (cursor' - bool (T.length (complexToRawText (e,(a,b)))) 0 (index==0) - T.length a')
@@ -260,7 +263,9 @@ languageHook mData = unless (T.null input) $
     model = modelOutput mData
 
     whole = resetCursor input cursor >> eraseRight >> (langAsAnsi rules input cscheme cursor executables >>= putStrf) >> when (cursor > 0) (moveCursor DLeft cursor)
-    masterNode = snd <$> runParser parseExpr input
+    r = runParser parseExpr input
+    rest = fst <$> r
+    masterNode = snd <$> r
 {-languageHook mData = unless (T.null input) $
   case masterNode >>= (`currentNode` cursor') of
     Just (n, i) -> case currentComplex n i of

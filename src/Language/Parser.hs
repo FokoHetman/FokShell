@@ -64,7 +64,14 @@ taskify (Pipe ps n1 n2) = (\x y -> Task {condition = \_ -> pure True {-probably 
     AppendErr -> File y AppendMode
     _      -> Terminal}
   ) <$> taskify n1 <*> nodeAsText n2
-taskify (ProgramCall e a) = Just $ PCall e a
+taskify (ProgramCall e a) = case e of
+  (Variant vs,_) -> taskify $ chainAnd $ fmap (`ProgramCall` a) vs
+  _ -> Just $ PCall e a
+
+chainAnd :: [Node] -> Node
+chainAnd [n] = n
+chainAnd (n:ns) = And n $ chainAnd ns
+chainAnd [] = undefined
 
 parseExpr, parseExpr', parseExpr'' :: Parser Node
 parseExpr = andand <|> parseExpr'
