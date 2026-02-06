@@ -41,7 +41,7 @@ myLightColorScheme = def {
       ("c0", pure $ RGB 235 219 178)
     , ("c1", pure $ RGB 214 93 14)
     ]
-  , textColor = pure $ RGB 29 32 33
+  , textColor = pure $ RGB 129 132 133
   , shadowText = pure $ RGB 29 32 33
   }
 
@@ -52,7 +52,7 @@ latteColorScheme = def {
       ("c0", pure $ RGB 221 120 120)
     , ("c1", pure $ RGB 214 93 14)
     ]
-  , textColor = pure $ RGB 29 32 33
+  , textColor = pure $ RGB 129 132 133
   , shadowText = pure $ RGB 29 32 33
   }
 
@@ -95,10 +95,7 @@ main = do
       ((control, Character "t"), \proc -> 
         let config = shellConfig proc in let conf = config {colorScheme = nextColorScheme (colorScheme config)} in redraw conf $> proc {shellConfig = conf})
     ]
-    , autocomplete = AutocompleteConfig {
-      redrawHook = languageHook
-    , model = languageModel
-    }
+    , autocomplete = def
     }
     where
       index cur = indexOf cur colorSchemes + 1

@@ -118,7 +118,7 @@ parseEvent proc key = do
     
     (KeyModifiers 0, Enter) -> swallowPrompt (cursorLoc conf) (input conf) (prompt conf $ colorScheme conf) >> 
         putStrLn "" >> 
-          (handleJob proc {shellConfig = conf {history = T.strip (input conf):history conf, historyIndex = Nothing}} >>= updatePath) 
+          (handleJob proc {shellConfig = conf {history = T.strip (input conf):history conf, historyIndex = Nothing}}) 
         <* displayPrompt (prompt conf $ colorScheme conf)
     
     (KeyModifiers 0, Backspace) -> moveCursor' conf DLeft 1 >> redrawFromCursor nconf $> proc {shellConfig = nconf}
@@ -145,7 +145,10 @@ parseEvent proc key = do
       let bind = filter (\x -> fst x == key) $ binds conf
       unwrapBind bind proc
   
-  autocompleteOverrides out
+
+  bool (autocompleteRedraw out) (pure ()) (colorScheme (shellConfig out) == colorScheme conf)
+  bool (autocompleteOverrides out) (pure ()) (input (shellConfig out) == input conf)
+  --autocompleteOverrides out
   pure $ updateWithKey key out
   where
     mdata c = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 

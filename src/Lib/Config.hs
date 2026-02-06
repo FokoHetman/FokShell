@@ -7,7 +7,7 @@ import Lib.Primitive
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Bits as B
-import Data.Dynamic (Dynamic)
+import Data.Dynamic (Dynamic, fromDynamic)
 import Lib.Keys
 import Lib.Format
 import System.Process
@@ -29,6 +29,7 @@ import System.Exit (exitSuccess)
 import Data.List (sort, group, intersperse)
 import Control.Concurrent (threadDelay)
 import Data.Bool (bool)
+import Data.Maybe (fromMaybe)
 
 data Job = Job {
     pid     :: Maybe Pid
@@ -203,7 +204,7 @@ exitAction (ShellProcess {}) = exitSuccess
 
 -- BUG: it doesn't display the current input, making clear with prompt yield weird results
 clearAction :: Action
-clearAction proc = let config = shellConfig proc; d = (T.length (input config) - cursorLoc config) in putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt config $ colorScheme config) >> when (d>0) (moveCursor DRight d) $> proc
+clearAction proc = let config = shellConfig proc; d = (T.length (input config) - cursorLoc config) in putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt config $ colorScheme config) >> when (d>0) (moveCursor DRight d) >> autocompleteRedraw proc $> proc
 
 displayPrompt :: Prompt -> IO ()
 displayPrompt = \case 
@@ -212,16 +213,19 @@ displayPrompt = \case
 
 
 
-{-
+
 nix :: CompletionRule
 nix = CompRule "nix" (\t -> pure $ filter (\(CompRule i _) -> t `T.isPrefixOf` i) [
     CompRule "run" flake
   ])
   where
     flake :: T.Text -> IO [CompletionRule]
-    flake t = case T.split (=='#') t of
-      [x] -> (++) <$> directoryRules <*> registries
--}
+    flake t' = bool (matchFlake t') (matchAttr t') (T.elem '#' t')
+      where
+      matchFlake = (++) <$> fileCompletion ((<&> isDirectory) . getFileStatus) $ const $ pure [] <*> registries
+      matchAttr t = case T.split (=='#') t of
+        [_,x] -> (++) <$> directoryRules <*> registries
+        _ -> undefined
 
 
 cdCompletion :: CompletionRule
@@ -291,4 +295,12 @@ instance Def ShellConfig where
     , completionRules = def
     }
 
+executablelist :: ShellProcess -> [T.Text]
+executablelist proc = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache proc) "executables" >>= \x -> lookupCache x "execs")
 
+mdata :: ShellProcess -> AutocompleteModelData
+mdata proc = let c = shellConfig proc in AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
+              historyL = history c, executableList = executablelist proc, builtinNames = fmap fst (builtins c), 
+              modelOutput = ([],[]), mCompletionRules = completionRules c}
+
+autocompleteRedraw proc' = let c = shellConfig proc' in model (autocomplete c) (mdata proc') >>= \x -> forceRedraw (autocomplete c) $ (mdata proc') {modelOutput = x}

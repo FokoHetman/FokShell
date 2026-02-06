@@ -8,7 +8,7 @@ import Data.List (singleton)
 import qualified Data.Text.IO as T
 import System.Environment (getEnv)
 import Control.Monad (filterM)
-import System.Directory (getPermissions, Permissions (executable), doesDirectoryExist, canonicalizePath, getDirectoryContents, getHomeDirectory, getCurrentDirectory)
+import System.Directory (getPermissions, Permissions (executable), doesDirectoryExist, canonicalizePath, getDirectoryContents, getHomeDirectory, getCurrentDirectory, doesFileExist)
 import System.FilePath.Posix ((</>))
 
 moveCursor :: Direction -> Int -> IO ()
@@ -45,7 +45,7 @@ getDirsInPath :: IO [FilePath]
 getDirsInPath = filterM doesDirectoryExist . fmap T.unpack . T.split (==':') . T.pack =<< getEnv "PATH"
 
 executablesInDir :: FilePath -> IO [FilePath]
-executablesInDir t = getDirectoryContents t >>= mapM (pure . (t</>)) >>= mapM canonicalizePath >>= filterM (fmap executable . getPermissions . (t</>))
+executablesInDir t = getDirectoryContents t >>= mapM (pure . (t</>)) >>= mapM canonicalizePath >>= filterM doesFileExist >>= filterM (fmap executable . getPermissions . (t</>))
 
 getFormattedDirectory :: IO T.Text
 getFormattedDirectory = do

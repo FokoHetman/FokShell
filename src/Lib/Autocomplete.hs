@@ -194,6 +194,18 @@ at _ _ [] = []
 at 0 f (x:xs) = f x:xs
 at i f (x:xs) = x: at (i-1) f xs
 
+langForceRedraw :: AutocompleteModelData -> IO ()
+langForceRedraw mData = resetCursor input cursor >> eraseRight >> (langAsAnsi rules input cscheme cursor executables >>= putStrf) >> when (cursor > 0) (moveCursor DLeft cursor)
+  where
+    input = modelInput mData
+    cursor = cursorLocation mData
+    cursor' = T.length input - cursor
+    executables = executableList mData ++ builtinNames mData
+    rules = mCompletionRules mData
+    cscheme = aColorScheme mData
+    model = modelOutput mData
+
+
 languageHook :: AutocompleteModelData -> IO ()
 languageHook mData = unless (T.null input || Just True/=(T.null <$> rest)) $
   case masterNode of
@@ -416,14 +428,16 @@ eraseRight = putStrf "\ESC[0K"
 
 
 data AutocompleteConfig = AutocompleteConfig {
-    model     :: AutocompleteModel
-  , redrawHook:: AutocompleteModelData -> IO ()
+    model      :: AutocompleteModel
+  , redrawHook :: AutocompleteModelData -> IO ()
+  , forceRedraw:: AutocompleteModelData -> IO ()
   }
 
 instance Def AutocompleteConfig where
   def = AutocompleteConfig {
     model = languageModel
   , redrawHook = languageHook
+  , forceRedraw = langForceRedraw
   }
 
 countLeadingWhitespace :: T.Text -> Int
