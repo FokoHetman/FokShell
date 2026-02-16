@@ -65,7 +65,7 @@ taskify (Pipe ps n1 n2) = (\x y -> Task {condition = \_ -> pure True {-probably 
     _      -> Terminal}
   ) <$> taskify n1 <*> nodeAsText n2
 taskify (ProgramCall e a) = case e of
-  (Variant vs,_) -> taskify $ chainAnd $ fmap (`ProgramCall` a) vs
+  (StringComplex (Variant vs,_)) -> taskify $ chainAnd $ fmap (`ProgramCall` a) vs
   _ -> Just $ PCall e a
 
 chainAnd :: [Node] -> Node
@@ -150,8 +150,8 @@ capStr s = f (runParser stringify s)
     f t = case t of
       Just ("", x) -> Just x
       Just (r,  x) -> capStr r >>= \case
-        (Combination y, ab) -> Just (Combination (x:y), ab)
-        y             -> Just (Combination [x, y], ("",""))
+        (StringComplex (Combination y, ab)) -> Just (StringComplex (Combination (x:y), ab))
+        y             -> Just (StringComplex (Combination [x, y], ("","")))
       Nothing -> Nothing --error "capStr died lmao"
 stringify :: Parser StringComplex
 stringify = basic <|> variant <|> envvar
@@ -160,13 +160,13 @@ constructFrom :: (t -> a1) -> a2 -> t -> b -> (a1, (a2, b))
 constructFrom t l c r = (t c, (l, r))
 
 envvar :: Parser StringComplex
-envvar = constructFrom EnvVar <$> ws <*> (charP '$' *> extractUntil stringblockers) <*> ws
+envvar = StringComplex <$> (constructFrom EnvVar <$> ws <*> (charP '$' *> extractUntil stringblockers) <*> ws)
 
 basic :: Parser StringComplex
-basic = constructFrom Basic <$> ws <*> extractUntil stringblockers <*> ws
+basic = StringComplex <$> (constructFrom Basic <$> ws <*> extractUntil stringblockers <*> ws)
 
 variant :: Parser StringComplex
-variant = constructFrom Variant <$> ws <*> (charP '{' *> variants <* charP '}') <*> ws
+variant = StringComplex <$> (constructFrom Variant <$> ws <*> (charP '{' *> variants <* charP '}') <*> ws)
   where
     variants = sepBy (ws *> charP ',' <* ws) stringify
 
@@ -209,15 +209,33 @@ spanP f = Parser $ \input ->
 data StringComplex' = Basic T.Text | EnvVar T.Text | Variant [StringComplex] | Combination [StringComplex]
   deriving (Show,Eq)
 
-type StringComplex = (StringComplex', (T.Text, T.Text))
+newtype StringComplex = StringComplex (StringComplex', (T.Text, T.Text)) deriving (Show,Eq)
+
+normaliseComplex :: StringComplex -> [StringComplex]
+normaliseComplex (StringComplex (Variant vs, (a,b))) = vs
+normaliseComplex (StringComplex (Combination vs, (a,b))) = compileCombinations vs
+normaliseComplex x = [x]
+
+compileCombinations :: [StringComplex] -> [StringComplex]
+compileCombinations ((StringComplex (Variant vs, (_,_))):xs) = compileCombinations vs ++ compileCombinations xs
+compileCombinations [x] = [x]
+compileCombinations (c:vs) = (c<>) <$> compileCombinations vs
+compileCombinations [] = []
+
+instance Semigroup StringComplex where
+  (<>) (StringComplex (Variant vs, (a,b))) t = StringComplex (Variant $ fmap (<>t) vs, (a, b))
+  (<>) t (StringComplex (Variant vs, (a,b))) = StringComplex (Variant $ fmap (t<>) vs, (a, b))
+  (<>) (StringComplex (EnvVar e, (a,b))) (StringComplex (Basic t,(a2,b2))) = StringComplex (EnvVar $ e<>b<>a2<>t, (a,b2))
+  (<>) (StringComplex (Basic t,(a2,b2))) (StringComplex (EnvVar e, (a,b))) = StringComplex (Combination [StringComplex (Basic t, (a2,b2)), StringComplex (EnvVar e, (a,b))], ("",""))
+  (<>) (StringComplex (Basic t, (a,b))) (StringComplex (Basic t2, (a2,b2))) = StringComplex (Basic $ t<>b<>a2<>t2, (a,b2))
 
 complexToText :: StringComplex -> IO T.Text
-complexToText (Basic t, (a,b)) = pure $ a<>t<>b
-complexToText (EnvVar t, (a,b)) = getEnv (T.unpack t) >>= \case
+complexToText (StringComplex (Basic t, (a,b))) = pure $ a<>t<>b
+complexToText (StringComplex (EnvVar t, (a,b))) = getEnv (T.unpack t) >>= \case
                             Just x -> pure $ a<>T.pack x<>b
                             Nothing -> pure $ a<>b
-complexToText (Variant ts, (a,b)) = mapM complexToText ts <&> (<>b) . (a<>) . T.unwords
-complexToText (Combination ts, (a,b)) = (\x -> a <> T.concat x <> b) <$> mapM complexToText ts
+complexToText (StringComplex (Variant ts, (a,b))) = mapM complexToText ts <&> (<>b) . (a<>) . T.unwords
+complexToText (StringComplex (Combination ts, (a,b))) = (\x -> a <> T.concat x <> b) <$> mapM complexToText ts
 
 
 complexToText' :: StringComplex' -> IO T.Text
@@ -230,10 +248,10 @@ complexToText' (Combination ts) = T.concat <$> mapM complexToText ts
 
 
 complexToRawText :: StringComplex -> T.Text
-complexToRawText (Basic t, (a,b)) = a<>t<>b
-complexToRawText (EnvVar t, (a,b)) = a<>"$"<>t<>b
-complexToRawText (Variant ts, (a,b)) = a<>"{" <> T.intercalate "," (fmap complexToRawText ts) <> "}"<>b
-complexToRawText (Combination ts, (a,b)) = a<> T.concat (fmap complexToRawText ts) <> b
+complexToRawText (StringComplex (Basic t, (a,b))) = a<>t<>b
+complexToRawText (StringComplex (EnvVar t, (a,b))) = a<>"$"<>t<>b
+complexToRawText (StringComplex (Variant ts, (a,b))) = a<>"{" <> T.intercalate "," (fmap complexToRawText ts) <> "}"<>b
+complexToRawText (StringComplex (Combination ts, (a,b))) = a<> T.concat (fmap complexToRawText ts) <> b
 
 complexToRawText' :: StringComplex' -> T.Text
 complexToRawText' (Basic t) = t

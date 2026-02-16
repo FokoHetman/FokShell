@@ -47,7 +47,7 @@ spawnJob proc' j = do
       case n of 
         Just n2 -> spawnJob evaluatedConf $ mkJob n2 sin sout serr -- or Terminal Terminal, idfk
         Nothing -> pure evaluatedConf
-    PCall n a  -> do
+    PCall (StringComplex n) a  -> do
       --if isBuiltin n then executeBuiltin n a else
       stdoutr <- getHandle pipeOut
       stdinr  <- getHandle pipeIn
@@ -55,7 +55,9 @@ spawnJob proc' j = do
 
       pname' <- (complexToText' . fst) n
       let pname = T.unpack pname'
-      args  <- mapM (complexToText' . fst) a
+      print a
+      args  <- mapM (complexToText' . fst) $ (\(StringComplex x) -> x) <$> concatMap normaliseComplex a
+      print args
       case lookup pname' (builtins conf) of
         Just x -> x args proc'
         Nothing -> do

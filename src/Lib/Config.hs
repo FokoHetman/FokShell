@@ -214,7 +214,7 @@ displayPrompt = \case
 
 
 
-nix :: CompletionRule
+{-nix :: CompletionRule
 nix = CompRule "nix" (\t -> pure $ filter (\(CompRule i _) -> t `T.isPrefixOf` i) [
     CompRule "run" flake
   ])
@@ -226,7 +226,7 @@ nix = CompRule "nix" (\t -> pure $ filter (\(CompRule i _) -> t `T.isPrefixOf` i
       matchAttr t = case T.split (=='#') t of
         [_,x] -> (++) <$> directoryRules <*> registries
         _ -> undefined
-
+-}
 
 cdCompletion :: CompletionRule
 cdCompletion = CompRule "cd" $ fileCompletion ((<&> isDirectory) . getFileStatus) $ const (pure [])

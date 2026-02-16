@@ -11,7 +11,6 @@ import System.IO (hSetEcho, hSetBuffering, stdin, BufferMode (NoBuffering), hFlu
 import Data.Functor
 
 import System.Posix.Signals
-import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
 import Data.IORef (newIORef, IORef, writeIORef, readIORef)
 
@@ -23,11 +22,10 @@ import Lib.Primitive
 import Lib.Keys
 import Lib.Config
 
-import Data.Dynamic (fromDynamic, toDyn)
+import Data.Dynamic (fromDynamic)
 import Data.Maybe (fromMaybe)
 import Data.Bool (bool)
 import Language.Parser (Parser(runParser), parseExpr)
-import Debug.Trace (traceShow)
 
 
 handleSignal :: IORef ShellProcess -> MVar () -> IO ()
@@ -98,7 +96,7 @@ parseEvent proc key = do
               Just (i, r) -> let j = max 0 (i-1) in conf {historyIndex = Just (j, r), input = history conf!!j}
             )
 
-    (KeyModifiers 0, Tab) -> bool (pure proc) (model (autocomplete conf) (mdata conf) >>= (\case
+    (KeyModifiers 0, Tab) -> bool (pure proc) (model (autocomplete conf) (moddata conf) >>= (\case
           [] -> pure proc
           (x:_)-> (putStr . T.unpack) (differ (curWord conf) x) >> hFlush stdout $> proc {shellConfig = replaceCurrent x conf}
         ) . fst) (cursorIndex conf == Just 0)
@@ -118,7 +116,7 @@ parseEvent proc key = do
     
     (KeyModifiers 0, Enter) -> swallowPrompt (cursorLoc conf) (input conf) (prompt conf $ colorScheme conf) >> 
         putStrLn "" >> 
-          (handleJob proc {shellConfig = conf {history = T.strip (input conf):history conf, historyIndex = Nothing}}) 
+          handleJob proc {shellConfig = conf {history = T.strip (input conf):history conf, historyIndex = Nothing}}
         <* displayPrompt (prompt conf $ colorScheme conf)
     
     (KeyModifiers 0, Backspace) -> moveCursor' conf DLeft 1 >> redrawFromCursor nconf $> proc {shellConfig = nconf}
@@ -151,8 +149,8 @@ parseEvent proc key = do
   --autocompleteOverrides out
   pure $ updateWithKey key out
   where
-    mdata c = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
-              historyL = history c, executableList = executablelist, builtinNames = fmap fst (builtins c), 
+    moddata c = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
+              historyL = history c, executableList = executablelist', builtinNames = fmap fst (builtins c), 
               modelOutput = ([],[]), mCompletionRules = completionRules c}
 
 
@@ -196,8 +194,8 @@ parseEvent proc key = do
         left  = T.take (T.length inp - T.length right) inp
 
     
-    executablelist :: [T.Text]
-    executablelist = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache proc) "executables" >>= \x -> lookupCache x "execs")
+    executablelist' :: [T.Text]
+    executablelist' = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache proc) "executables" >>= \x -> lookupCache x "execs")
 
-    autocompleteOverrides proc' = let c = shellConfig proc' in model (autocomplete c) (mdata c) >>= \x -> redrawHook (autocomplete c) $ (mdata c) {modelOutput = x}
+    autocompleteOverrides proc' = let c = shellConfig proc' in model (autocomplete c) (moddata c) >>= \x -> redrawHook (autocomplete c) $ (moddata c) {modelOutput = x}
 
