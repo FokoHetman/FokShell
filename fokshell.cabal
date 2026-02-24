@@ -86,6 +86,7 @@ library
                     , unix
                     , hostname
                     , system-fileio
+                    , megaparsec
 
     -- Directories containing source files.
     hs-source-dirs:   src

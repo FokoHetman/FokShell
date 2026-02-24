@@ -19,6 +19,7 @@ import Data.List (singleton)
 import Language.Parser
 import System.Environment (lookupEnv, getEnvironment)
 import Data.Bifunctor (Bifunctor(bimap, second))
+import Debug.Trace (traceShow)
 
 
 type AutocompleteModel = AutocompleteModelData -> IO ([T.Text], [T.Text])
@@ -32,7 +33,7 @@ findArg' f (StringComplex (str, (a, b)):ts) i = bool (first (+1) <$> findArg' f 
       Variant s -> case snd <$> findArg' ((\x -> x-1) . f) s (i - T.length a - 1) of
         Just x -> Just $ snd x
         Nothing -> Nothing
-      Combination _ -> error "idk bruv"
+      Combination xs -> snd . snd <$> findArg xs i
       EnvVar e -> Just $ "$" <> e
       _ -> error "?"
 findArg' _ [] _ = Nothing
@@ -202,12 +203,76 @@ langForceRedraw mData = resetCursor input cursor >> eraseRight >> (langAsAnsi ru
     cscheme = aColorScheme mData
     model = modelOutput mData
 
+{-mkPrediction :: [CompletionRule] -> [StringComplex] -> Maybe [T.Text]
+mkPrediction rules stack = compileCombinations stack >>= \case
+    StringComplex (Basic b,_) -> lookupRule b rules
+  where
+    compiled = compileCombinations stack
+    --isValidArgument rules (complexToRawText' (fst e):take (i+1) ((\(c, _) -> complexToRawText' c) <$> fmap (\(StringComplex x) -> x) a))
+    --        >>= bool ((<>"\ESC[4m") . asciiColor <$> textColor cscheme) (asciiColor <$> textColor cscheme)
+-}
+hookSC :: ColorScheme -> ([T.Text], [T.Text]) -> [CompletionRule] -> StringComplex -> [StringComplex] -> Int -> IO ()
+hookSC cscheme model rules (StringComplex (Basic s, (a,b))) complexstack _cursor = do
+  let prediction = case fst model of
+        (x:xs) -> fromJust $ T.stripPrefix s x
+        [] -> ""
+  let compiled =  normaliseComplex $ StringComplex (Combination $ complexstack ++ [StringComplex (Basic s, (a,b))], ("",""))
+  let x = fmap ((`lookupRule` rules) . complexToRawText) compiled
+  let validityStyle = case x of
+        [Just _] -> ""
+        [Nothing]-> "\ESC[4m"
+  shadow <- asciiColor <$> shadowText cscheme
+  text   <- asciiColor <$> textColor cscheme
+  putStrf $ a <> text <> validityStyle <> s <> clear <> shadow <> prediction <> clear <> b
+  let d = T.length s + T.length a + T.length b + T.length prediction
+  when (d>0) (moveCursor DLeft d)
+hookSC cscheme model rules (StringComplex (Variant vs, (a,b))) cstack cursor = do
+  shadow <- asciiColor <$> shadowText cscheme
+  text   <- asciiColor <$> textColor cscheme
+  putStrf $ a <> text <> "{"
+  let left = T.intercalate "," $ complexToRawText <$> take argindex vs
+  putStrf left
+  hookSC cscheme model rules (vs !! argindex) cstack $ cursor - 1 - T.length left - T.length a
+  let right = T.intercalate "," $ complexToRawText <$> reverse (take (length vs - argindex) $ reverse vs)
+  putStrf $ right <> "}" <> b
+  where
+    arg = findArgVariant vs cursor
+    argindex = case arg of
+      Just (argi,_) -> argi
+      Nothing -> 0
+hookSC cscheme model rules (StringComplex (Combination xs, (a,b))) cstack cursor = do
+  let leftstack = take argindex xs
+  let left = T.concat $ complexToRawText <$> leftstack
+  putStrf $ a <> left
+  hookSC cscheme model rules (xs !! argindex) (cstack ++ leftstack) $ cursor - T.length left - T.length a
+  let right = T.concat $ complexToRawText <$> reverse (take (length xs - argindex) $ reverse xs)
+  putStrf $ right <> b
+  where
+    arg = findArg xs (cursor - T.length a)
+    argindex = case arg of
+      Just (argi,_) -> argi
+      Nothing -> 0
+hookSC _ _ _ _ _ _ = undefined
 
 languageHook :: AutocompleteModelData -> IO ()
 languageHook mData = unless (T.null input || Just True/=(T.null <$> rest)) $
   case masterNode of
     Just (ProgramCall (StringComplex (e,(a,b))) args) -> case currentComplex (fromJust masterNode) i of
-      Just (complex,(char,index)) -> when (char>0) (moveCursor DLeft char) >> case complex of
+      Just (complex,(char,index)) -> when (char>0) (moveCursor DLeft char) >> putStrf clearRight >> do 
+        args'' <- args'
+        rules' <- case lookupRule (complexToRawText' e) rules of
+          Just rule -> nestNTimes rule (fmap (\(StringComplex (arg, _)) -> complexToRawText' arg) args) (index-1)
+          Nothing -> pure []
+        hookSC cscheme model rules' complex [] (cursor' - bool (T.length (complexToRawText (StringComplex (e,(a,b))))) 0 (index==0)) 
+        when (char>0) (moveCursor DRight char)
+        putStrf args''
+        where
+        rawargs = T.concat (fmap complexToRawText (reverse $ take (length args - index) $ reverse args))
+        argst = fmap complexToRawText args
+        args' = formatArgs (bool (complexToRawText' e:take (index-1) argst) [complexToRawText' e] (index==0)) (reverse $ take (length args - index) $ reverse argst) (1+index)
+        formatArgs prev (n:ns) i = (\x y -> x<>n<>y) <$> wordFormat' n i [] <*> formatArgs (prev++[n]) ns (i+1)
+        formatArgs _ [] _ = pure ""
+        {-case complex of
         (StringComplex (Basic basic', (a,b))) -> do 
           args'' <- args'
           fmt <- wordFormat basic' index
@@ -232,13 +297,19 @@ languageHook mData = unless (T.null input || Just True/=(T.null <$> rest)) $
               Nothing -> (0,"")
         (StringComplex (EnvVar e, (a,b))) -> args' >>= \args'' -> (getEnvironment >>= wordFormat' e index . fmap (T.pack . fst))
           >>= putStrf . (((a<>"$")<>e)<>) . (<>b<>args'')
+        (StringComplex (Combination xs, (a',b'))) -> do
+          args'' <- args'
+          s <- shadowText cscheme <&> asciiColor
+          xargs <- mapM (\x -> let (x',(a,b)) = x in wordFormat (complexToRawText' x') index <&> (a<>) . (<>complexToRawText' x'<>clear<>b)) $ fmap (\(StringComplex x) -> x) xs
+          (putStrf . (a'<>) . (<>(b'<>args'')) . T.concat . at argindex (<>s<>predi<>clear)) xargs
+          putStrf clearRight
+          moveCursor DLeft (cursor + T.length predi)
+          where
+            (argindex, predi) = case findArg xs (cursor' - bool (T.length (complexToRawText (StringComplex (e,(a,b))))) 0 (index==0) - T.length a') of
+              Just (argi, (_,t)) -> (argi,prediction' t)
+              Nothing -> (0,"")
         _ -> error "no impl"
-        where
-        rawargs = T.concat (fmap complexToRawText (reverse $ take (length args - index) $ reverse args))
-        argst = fmap complexToRawText args
-        args' = formatArgs (bool (complexToRawText' e:take (index-1) argst) [complexToRawText' e] (index==0)) (reverse $ take (length args - index) $ reverse argst) (1+index)
-        formatArgs prev (n:ns) i = (\x y -> x<>n<>y) <$> wordFormat' n i [] <*> formatArgs (prev++[n]) ns (i+1)
-        formatArgs _ [] _ = pure ""
+        -}
       Nothing -> whole
       where
       n = fromJust masterNode
@@ -255,7 +326,7 @@ languageHook mData = unless (T.null input || Just True/=(T.null <$> rest)) $
         (asciiColor <$> bool (errorColor cscheme) (successColor cscheme) (word `elem` argvs))
         (index == 0)
       -- todo: stop hard coding the "fst" and make a configurable function taking history and execs instead
-      prediction' x = fromMaybe "" (prediction x)
+      prediction' = fromMaybe "" . prediction
       prediction :: T.Text -> Maybe T.Text
       prediction x = case n of 
         ProgramCall _ _ -> case fst model of 
