@@ -25,7 +25,7 @@ import Debug.Trace (traceShow)
 type AutocompleteModel = AutocompleteModelData -> IO ([T.Text], [T.Text])
 
 findArg' :: (Int -> Int) -> [StringComplex] -> Int -> Maybe (Int, (Int,T.Text))
-findArg' f (StringComplex (str, (a, b)):ts) i = bool (first (+1) <$> findArg' f ts (f $ i - {-?-} T.length a - T.length t - T.length b)) (t' <&> \tt -> (0, (i - T.length a,tt))) (T.length t >= i && i >= 0)
+findArg' f (StringComplex (str, (a, b)):ts) i = bool (first (+1) <$> findArg' f ts (f $ i - T.length t - T.length b)) (t' <&> \tt -> (0, (i - T.length a,tt))) (T.length t >= i && i >= 0)
   where 
     t = a<>complexToRawText' str
     t' = case str of
@@ -61,7 +61,7 @@ languageModel modelData = case parsed of
               Just (_,(_,t))-> filter (T.isPrefixOf t) executables
               _         -> []
             Combination ts -> pure $ case findArg ts i of
-              Just (_,(_,t))-> filter (T.isPrefixOf t) executables
+              Just (ii,(_,t))-> filter (T.isPrefixOf $ T.concat $ fmap complexToRawText $ take ii ts) executables
               _         -> []
             EnvVar a    -> lookupEnv (T.unpack a) <&> \case 
               Just x -> ((`filter` executables) . T.isPrefixOf . T.pack) x
@@ -69,6 +69,7 @@ languageModel modelData = case parsed of
               
           rule = lookupRule exec' rules
           curArg = findArg args (cursor - T.length exec'')
+          curComplex = currentComplex n cursor
           argMatches = case rule of
             Just r -> case curArg of
               Nothing -> pure []
@@ -211,61 +212,82 @@ mkPrediction rules stack = compileCombinations stack >>= \case
     --isValidArgument rules (complexToRawText' (fst e):take (i+1) ((\(c, _) -> complexToRawText' c) <$> fmap (\(StringComplex x) -> x) a))
     --        >>= bool ((<>"\ESC[4m") . asciiColor <$> textColor cscheme) (asciiColor <$> textColor cscheme)
 -}
-hookSC :: ColorScheme -> ([T.Text], [T.Text]) -> [CompletionRule] -> StringComplex -> [StringComplex] -> Int -> IO ()
-hookSC cscheme model rules (StringComplex (Basic s, (a,b))) complexstack _cursor = do
+hookSC :: ColorScheme -> ([T.Text], [T.Text]) -> [CompletionRule] -> [T.Text] -> StringComplex -> [StringComplex] -> Int -> Bool -> Bool -> IO Int
+hookSC cscheme model rules executables (StringComplex (Basic s, (a,b))) complexstack cursor dopredict isexecutable = do
   let prediction = case fst model of
-        (x:xs) -> fromJust $ T.stripPrefix s x
+        (x:_) -> fromJust $ T.stripPrefix s x
         [] -> ""
-  let compiled =  normaliseComplex $ StringComplex (Combination $ complexstack ++ [StringComplex (Basic s, (a,b))], ("",""))
-  let x = fmap ((`lookupRule` rules) . complexToRawText) compiled
+  let compiled = normaliseComplex $ StringComplex (Combination $ complexstack ++ [StringComplex (Basic s, (a,b))], ("",""))
+  let x = mapM ((`lookupRule` rules) . complexToRawText' . (\(StringComplex (c,_)) -> c)) compiled
   let validityStyle = case x of
-        [Just _] -> ""
-        [Nothing]-> "\ESC[4m"
+        Just _ -> ""
+        Nothing-> "\ESC[4m"
+  execValidity <- asciiColor <$> (bool successColor errorColor $ s `elem` executables) cscheme
   shadow <- asciiColor <$> shadowText cscheme
   text   <- asciiColor <$> textColor cscheme
-  putStrf $ a <> text <> validityStyle <> s <> clear <> shadow <> prediction <> clear <> b
-  let d = T.length s + T.length a + T.length b + T.length prediction
-  when (d>0) (moveCursor DLeft d)
-hookSC cscheme model rules (StringComplex (Variant vs, (a,b))) cstack cursor = do
-  shadow <- asciiColor <$> shadowText cscheme
+  putStrf $ a <> text <> bool validityStyle execValidity isexecutable <> s <> clear <> bool "" (shadow <> prediction) dopredict <> clear <> b
+  pure $ T.length prediction
+  --let d = T.length s + T.length a + T.length b + bool 0 (T.length prediction) dopredict
+  --when (dopredict && d>0) (moveCursor DLeft d)
+hookSC cscheme model rules e (StringComplex (Variant vs, (a,b))) cstack cursor dopredict isexecutable = do
   text   <- asciiColor <$> textColor cscheme
   putStrf $ a <> text <> "{"
-  let left = T.intercalate "," $ complexToRawText <$> take argindex vs
-  putStrf left
-  hookSC cscheme model rules (vs !! argindex) cstack $ cursor - 1 - T.length left - T.length a
-  let right = T.intercalate "," $ complexToRawText <$> reverse (take (length vs - argindex) $ reverse vs)
-  putStrf $ right <> "}" <> b
+  ret <- bool (do 
+    let left = take argindex vs
+    let d1 = T.intercalate "," $ complexToRawText <$> left
+    mapM_ (\c -> hookSC cscheme model rules e c cstack 0 False isexecutable >> putStrf ",") left
+    ret <- hookSC cscheme model rules e (vs !! argindex) cstack (cursor {- - 1 (idk why) + 1 (d1) -} - T.length d1 - T.length a) dopredict isexecutable -- not let = to force evaluation
+    let right = reverse (take (length vs - argindex - 1) $ reverse vs)
+    mapM_ (\c -> putStrf "," >> hookSC cscheme model rules e c cstack 0 False isexecutable) right
+    pure ret
+    ) (pure 0) (null vs)
+  
+  putStrf $ text <> "}" <> b
+  pure ret
+  --let d = T.length $ T.intercalate "," $ fmap complexToRawText right
+  --when dopredict $ moveCursor DLeft $ d + 1
   where
-    arg = findArgVariant vs cursor
+    arg = findArgVariant vs $ cursor - T.length a
     argindex = case arg of
       Just (argi,_) -> argi
       Nothing -> 0
-hookSC cscheme model rules (StringComplex (Combination xs, (a,b))) cstack cursor = do
+hookSC cscheme model rules e (StringComplex (Combination xs, (a,b))) cstack cursor dopredict isexecutable = do
+  -- todo: calculate stack for all leftstack and rightstack stuff, to achieve proper completion.
   let leftstack = take argindex xs
   let left = T.concat $ complexToRawText <$> leftstack
-  putStrf $ a <> left
-  hookSC cscheme model rules (xs !! argindex) (cstack ++ leftstack) $ cursor - T.length left - T.length a
-  let right = T.concat $ complexToRawText <$> reverse (take (length xs - argindex) $ reverse xs)
-  putStrf $ right <> b
+  putStrf a
+  mapM_ (\c -> hookSC cscheme model rules e c cstack 0 False isexecutable) leftstack
+  let right = reverse (take (length xs - argindex - 1) $ reverse xs)
+  ret <- hookSC cscheme model rules e (xs !! argindex) (cstack ++ leftstack) (cursor - T.length left - T.length a) (null right) isexecutable
+  mapM_ (\c -> hookSC cscheme model rules e c cstack 0 False isexecutable) right
+  putStrf b
+  pure ret
   where
-    arg = findArg xs (cursor - T.length a)
+    arg = findArg xs $ cursor - T.length a
     argindex = case arg of
       Just (argi,_) -> argi
       Nothing -> 0
-hookSC _ _ _ _ _ _ = undefined
+hookSC _ _ _ _ _ _ _ _ _ = undefined
 
 languageHook :: AutocompleteModelData -> IO ()
 languageHook mData = unless (T.null input || Just True/=(T.null <$> rest)) $
   case masterNode of
     Just (ProgramCall (StringComplex (e,(a,b))) args) -> case currentComplex (fromJust masterNode) i of
       Just (complex,(char,index)) -> when (char>0) (moveCursor DLeft char) >> putStrf clearRight >> do 
+        let cursor = char
+        let cursor' = T.length (complexToRawText complex) - char
         args'' <- args'
         rules' <- case lookupRule (complexToRawText' e) rules of
           Just rule -> nestNTimes rule (fmap (\(StringComplex (arg, _)) -> complexToRawText' arg) args) (index-1)
-          Nothing -> pure []
-        hookSC cscheme model rules' complex [] (cursor' - bool (T.length (complexToRawText (StringComplex (e,(a,b))))) 0 (index==0)) 
-        when (char>0) (moveCursor DRight char)
+          Nothing -> nestNTimes (fileListCompletion (const $ pure True) (complexToRawText' e)) (fmap (\(StringComplex (arg, _)) -> complexToRawText' arg) args) (index-1)
+        -- THE ISSUE is that the cursor argument is negative. Thank me later future fok
+        -- kill yourself past fok
+        d <- hookSC cscheme model rules' executables complex [] cursor True (index==0)
+        --when (d+cursor'>0) (moveCursor DLeft $ d+cursor')
+        --when (char>0) (moveCursor DRight char)
         putStrf args''
+        let d2 = T.length rawargs + d + cursor'
+        when (d2>0) (moveCursor DLeft d2)
         where
         rawargs = T.concat (fmap complexToRawText (reverse $ take (length args - index) $ reverse args))
         argst = fmap complexToRawText args

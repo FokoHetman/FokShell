@@ -176,10 +176,10 @@ basic' = StringComplex . constructNoWS Basic <$> extractUntil stringblockers
 variant, variant' :: Parser StringComplex
 variant = StringComplex <$> (constructFrom Variant <$> ws <*> (charP '{' *> variants <* charP '}') <*> ws)
   where
-    variants = sepBy (ws *> charP ',' <* ws) stringify
+    variants = sepBy (charP ',') stringify
 variant' = StringComplex . constructNoWS Variant <$> (charP '{' *> variants <* charP '}')
   where
-    variants = sepBy (ws *> charP ',' <* ws) stringify
+    variants = sepBy (charP ',') stringify
 extractUntil :: [Char] -> Parser T.Text
 extractUntil b = Parser f'
   where
