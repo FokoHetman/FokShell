@@ -1,5 +1,5 @@
-{-# LANGUAGE LambdaCase, OverloadedStrings, ExistentialQuantification #-}
-module ExposedTypes where
+{-# LANGUAGE LambdaCase, OverloadedStrings #-}
+module FokShell.Types where
 
 import qualified Data.Text as T
 
@@ -17,12 +17,6 @@ import Lib.Primitive
 import Lib.Format
 import Lib.Keys
 import Lib.Config
-
-
-exitCodeToInt :: ExitCode -> Int
-exitCodeToInt ExitSuccess     = 0
-exitCodeToInt (ExitFailure c) = c
-
 
 -- TODO: extract to a separate file
 
@@ -78,5 +72,3 @@ moveCursor' _ _ _ = error "unsupported '-wrapped direction"
 
 updateWithKey :: KeyEvent -> ShellProcess -> ShellProcess
 updateWithKey event proc = proc {shellConfig = (shellConfig proc) {lastEvent=event}}
-
-

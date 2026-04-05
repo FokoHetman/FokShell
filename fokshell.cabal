@@ -59,25 +59,27 @@ library
 
     -- Modules exported by the library.
     exposed-modules:  FokShell
-                    , ExposedTypes
+                    , FokShell.JobManager
+                    , FokShell.Types
+--                    , ExposedTypes
                     , Lib.ColorScheme
                     , Lib.Primitive
-                    , Lib.Autocomplete
+--                    , Lib.Autocomplete
                     , Lib.Format
                     , Lib.Config
                     , Lib.Keys
                     , Language.Parser
---                    , InputHandling
+--                    , FokShell.InputHandling
 --                    , JobManager
 
     -- Modules included in this library but not exported.
-    other-modules:    InputHandling
-                    , JobManager
-                    , InnerTypes
+    other-modules:    FokShell.InputHandling
+--                    , JobManager
+--                    , InnerTypes
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
 
-    -- Other library packages from which modules are imported.
+    -- Other library packages from which modules are imported
     build-depends:    base 
                     , text
                     , filepath
@@ -86,14 +88,18 @@ library
                     , unix
                     , hostname
                     , system-fileio
-                    , megaparsec
+                    , containers
+                    , regex-tdfa
+                    , bytestring
 
     -- Directories containing source files.
     hs-source-dirs:   src
 
     -- Base language which the package is written in.
     default-language: GHC2021
-
+    default-extensions:
+      OverloadedRecordDot,
+      DuplicateRecordFields
 test-suite fokshell-test
     -- Import common warning flags.
     import:           warnings

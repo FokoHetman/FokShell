@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
-module InputHandling where
+module FokShell.InputHandling where
 
 import qualified Data.Text as T
 import System.IO (hWaitForInput, stdin)

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings, LambdaCase #-}
 module Lib.Config where
 
-import Lib.Autocomplete
+--import Lib.Autocomplete
 import Lib.ColorScheme
 import Lib.Primitive
 import qualified Data.Text as T
@@ -11,6 +11,10 @@ import Data.Dynamic (Dynamic, fromDynamic)
 import Lib.Keys
 import Lib.Format
 import System.Process
+
+
+import Data.ByteString qualified as BS
+
 
 import System.Posix (fileExist, createFile, ownerWriteMode, ownerReadMode, closeFd, changeWorkingDirectory, getFileStatus, isDirectory, isRegularFile)
 import System.Directory (getHomeDirectory, doesDirectoryExist, getPermissions, Permissions (readable, executable, searchable), getDirectoryContents, doesFileExist, doesPathExist)
@@ -23,17 +27,148 @@ import Data.Functor
 
 import GHC.IO.Handle
 import Language.Parser
-import GHC.IO.Exception (ExitCode)
+import GHC.IO.Exception (ExitCode (ExitSuccess, ExitFailure))
 import Control.Monad
 import System.Exit (exitSuccess)
 import Data.List (sort, group, intersperse)
 import Control.Concurrent (threadDelay)
 import Data.Bool (bool)
 import Data.Maybe (fromMaybe)
+import Data.Text.IO qualified as T
+import System.IO (openFile, IOMode (WriteMode, AppendMode), stdin)
+
+import Data.Map qualified as Map
+
+import Text.Regex.TDFA
+import Text.Regex.TDFA.Text ()
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+
+
+exitCodeToInt :: ExitCode -> Int
+exitCodeToInt ExitSuccess     = 0
+exitCodeToInt (ExitFailure c) = c
+
+data TaskPipeType = File FilePath IOMode | Terminal | NodePipe (IORef Node)
+
+data Task = Task {
+  procName    :: T.Text
+, procArgs    :: [T.Text]
+, pipeIn      :: TaskPipeType
+, pipeOut     :: TaskPipeType
+, pipeErr     :: TaskPipeType
+, prevTask    :: Maybe Task
+, condition   :: ExitCode -> Bool
+}
+
+nodeToString :: Node -> T.Text
+nodeToString (NodeString s) = s
+nodeToString (ProcessCall x xs) = nodeToString x <> T.concat (fmap nodeToString xs)
+nodeToString x = traceShow x undefined
+mkTask' :: T.Text -> Maybe (IO Task)
+mkTask' t = runParser parseSeq t <&> mkTask . snd
+
+mkTask :: Node -> IO Task
+mkTask (Sequence n1 n2) = do
+  n2' <- mkTask n2
+  n1' <- mkTask n1
+  pure n2' {prevTask = Just n1', condition = const True}
+mkTask (And n1 n2) = do
+  n2' <- mkTask n2
+  n1' <- mkTask n1
+  pure $ n2' {prevTask = Just n1', condition = (==0) . exitCodeToInt}
+mkTask (Pipe pt n1 n2) = case pt of
+  ProcessPipe -> do
+    n2' <- mkTask n2
+    n1' <- mkTask n1
+    ref <- newIORef $ NodeString ""
+    pure n2' {pipeIn = NodePipe ref, prevTask = Just $ n1' {pipeOut = NodePipe ref}}
+  Write Stdout -> mkFilePipe n1 n2 Stdout WriteMode
+  Write Stderr -> mkFilePipe n1 n2 Stderr WriteMode
+  Append Stdout -> mkFilePipe n1 n2 Stdout AppendMode
+  Append Stderr -> mkFilePipe n1 n2 Stderr AppendMode
+  Read -> undefined
+  where
+    mkFilePipe n1 n2 Stdout mode = do
+      n1' <- mkTask n1
+      pure n1' {pipeOut = File (T.unpack $ nodeToString n2) mode}
+    mkFilePipe n1 n2 Stderr mode = do
+      n1' <- mkTask n1
+      pure n1' {pipeErr = File (T.unpack $ nodeToString n2) mode}
+mkTask (ProcessCall (NodeString pname) args) = pure Task {
+  procName = pname
+, procArgs = fmap nodeToString args
+, pipeIn = Terminal
+, pipeOut = Terminal
+, pipeErr = Terminal
+, prevTask = Nothing
+-- | given exit code of prevTask determines whether this task should run
+, condition = const True
+}
+mkTask (Table t) = do 
+  n <- newIORef (Table t)
+  pure Task {
+    procName = "table"
+  , procArgs = []
+  , pipeIn = NodePipe n
+  , pipeOut = NodePipe n
+  , pipeErr = Terminal
+  , prevTask = Nothing
+  , condition = const True
+  }
+mkTask x = error $ "unknown task: " <> show x
+
+{-
+mkTask :: Node -> Task
+mkTask (Sequence n1 n2) = BinaryTask {
+  left = mkTask n1
+, right = mkTask n2
+, condition = const True
+}
+mkTask (And n1 n2) = BinaryTask {
+  left = mkTask n1
+, right = mkTask n2
+, condition = (==0) . exitCodeToInt
+}
+mkTask (Pipe pt n1 n2) = case pt of
+  ProcessPipe -> (mkTask n1) {pipeIn=NodePipe n2}
+  Write Stdout -> (mkTask n1) {pipeOut=File (T.unpack $ (\(NodeString x) -> x) n2) WriteMode}
+  Write Stderr -> (mkTask n1) {pipeErr=File (T.unpack $ (\(NodeString x) -> x) n2) WriteMode}
+  Append Stdout -> (mkTask n1) {pipeOut=File (T.unpack $ (\(NodeString x) -> x) n2) AppendMode}
+  Append Stderr -> (mkTask n1) {pipeErr=File (T.unpack $ (\(NodeString x) -> x) n2) AppendMode}
+  Read -> undefined
+mkTask (ProcessCall name args) = ProcessTask {
+  procName = (\(NodeString x) -> x) name
+, args = fmap (\(NodeString x) -> x) args
+}
+
+data Task = BinaryTask {
+  left  :: Task
+, right :: Task
+-- | given exit code of left, determine whether right should be launched
+, condition :: ExitCode -> Bool
+} | ProcessTask {
+  procName  :: T.Text
+, args      :: [T.Text]
+, pipeIn    :: TaskPipeType
+, pipeOut   :: TaskPipeType
+, pipeErr   :: TaskPipeType
+}
+-}
+data Process = Process {
+  pid       :: Pid
+, procHandle:: ProcessHandle
+, procOuth  :: Handle
+, procErrh  :: Handle
+, procInh   :: Handle
+}
 
 data Job = Job {
+  task :: Task
+}
+{-
+data Job = Job {
     pid     :: Maybe Pid
-  , task    :: Task
+  --, task    :: Task
   , stdoutj :: Maybe Handle
   , stderrj :: Maybe Handle
   , stdinj  :: Maybe Handle
@@ -42,6 +177,7 @@ data Job = Job {
   , pipeIn  :: PipeType
   , pipeErr :: PipeType
 }
+-}
 
 newtype JobMgr = JobMgr [Job]
 
@@ -86,6 +222,7 @@ data ShellProcess = ShellProcess {
 
 
 type Hook = ShellProcess -> IO Bool -- bool tells whether to continue afterhand action
+
 
 type Action = ShellProcess -> IO ShellProcess
 
@@ -142,17 +279,136 @@ instance Def [(KeyEvent, Action)] where
       , ((control, Character "l"), \proc -> clearHook(hooks (shellConfig proc)) (proc {shellConfig = (shellConfig proc) {trigger=(control, Character "l")}}) >>= \x -> if x then clearAction proc else pure proc)
     ]
 
-type Builtin = (T.Text, [T.Text] -> Action)
+
+type Builtin = (T.Text, [T.Text] -> (TaskPipeType, TaskPipeType, TaskPipeType) -> ShellProcess -> IO (ExitCode, ShellProcess))
 
 cd :: Builtin
-cd = ("cd", \args process -> do
+cd = ("cd", \args (_inh, outh, errh) process -> do
+    errHandle <- case errh of
+      Terminal -> pure stdin
+      File fname mode -> openFile fname mode
+      _ -> undefined
+    let writeErr = T.hPutStr errHandle
     _ <- case args of
       [x] -> do
         let d = T.unpack x
-        doesDirectoryExist d >>= bool (putStrf "cd: directory does not exist.\n") (getPermissions d >>= bool (putStrf "cd: no permissions.\n") (changeWorkingDirectory d) . searchable)
-      []  -> putStrf "cd: no arg provided.\n"
-      _   -> putStrf "cd: too many args provided.\n"
-    pure process-- replace getters with just a cached value that changes here?
+        doesDirectoryExist d >>= bool (writeErr "cd: directory does not exist.\n") (getPermissions d >>= bool (writeErr "cd: no permissions.\n") (changeWorkingDirectory d) . searchable)
+      []  -> writeErr "cd: no arg provided.\n"
+      _   -> writeErr "cd: too many args provided.\n"
+    pure (ExitSuccess, process)  -- replace getters with just a cached value that changes here?
+                                 --  ^^ what
+  )
+
+table :: Builtin
+table = ("table", \args (inh, outh, errh) process -> case inh of
+      NodePipe ref -> do
+        Table n <- readIORef ref
+        case outh of
+          NodePipe oref -> writeIORef oref (Table n) $> (ExitSuccess, process)
+          Terminal -> displayTable n $> (ExitSuccess, process)
+          File fname mode -> (openFile fname mode >>= (`T.hPutStr` (tableToJson n))) $> (ExitSuccess, process)
+      _ -> undefined
+      )
+
+tableToJson :: (Map.Map Node Node) -> T.Text
+tableToJson t = "{" <> T.concat (intersperse ",\n" $ fmap display' $ Map.toList t) <> "}"
+
+displayTable :: (Map.Map Node Node) -> IO ()
+displayTable t = T.putStrLn $ T.concat $ intersperse "\n" $ fmap display' $ Map.toList t
+
+display' :: (Node, Node) -> T.Text
+display' (n1, n2) = nodeToString n1 <> ": " <> nodeToString n2
+
+
+executeTask :: ShellProcess -> Task -> IO (ExitCode, ShellProcess)
+executeTask proc' t = do
+  let name = t.procName
+  let args = t.procArgs
+  let builtins = proc'.shellConfig.builtins
+  case lookup name builtins of
+    Just x  -> x args (t.pipeIn, t.pipeOut, t.pipeErr) proc'
+    Nothing -> do
+      (out_h, outpre) <- getPipe t.pipeOut
+      (err_h, errpre) <- getPipe t.pipeErr
+      (in_h , inpre) <- getPipe t.pipeIn
+      (inh, outh, errh, proch) <- createProcess (proc (T.unpack name) $ fmap T.unpack args) { std_out = out_h, std_err = err_h, std_in = in_h }
+      flushPrewritten inh inpre
+      exitCode <- waitForProcess proch
+      flushOutput outpre outh
+      pure (exitCode, proc')
+  where
+    flushOutput :: (Maybe T.Text) -> (Maybe Handle) -> IO ()
+    flushOutput _ (Just h) = do
+      r <- T.hGetContents h
+      case t.pipeOut of
+        NodePipe ref -> writeIORef ref $ NodeString r
+        Terminal -> pure ()
+        File _ _ -> pure ()
+    flushOutput _ _ = pure ()
+    flushPrewritten :: Maybe Handle -> Maybe T.Text -> IO ()
+    flushPrewritten _ Nothing = pure ()
+    flushPrewritten (Just h) (Just x) = T.hPutStr h x
+    getPipe :: TaskPipeType -> IO (StdStream, Maybe T.Text)
+    getPipe (NodePipe n) = do
+      n <- readIORef n
+      pure $ (CreatePipe, Just $ nodeToString n)
+    getPipe (Terminal) = pure (Inherit, Nothing)
+    getPipe (File f m) = openFile f m <&> (,Nothing) . UseHandle
+
+
+bmap :: Builtin
+bmap = ("map", \args (inh, outh, errh) process -> case inh of
+    NodePipe ref -> do
+      let (name:argv) = args
+      n <- readIORef ref
+      let ns = case n of
+            Array ns' -> ns'
+            Table ns' -> fmap snd $ Map.toList ns'
+            _ -> undefined
+      let defaultTask = Task {
+        procName = name
+      , procArgs = argv
+      , pipeIn = Terminal
+      , pipeOut = Terminal
+      , pipeErr = Terminal
+      , prevTask = Nothing
+      , condition = const True
+      }
+      tasks <- mapM ((\x -> (x <&> \y -> defaultTask {pipeIn = NodePipe y})) . newIORef) ns
+      -- TODO: collect out into whatever `n` is and push into outh
+      mapM_ (executeTask process) tasks
+      {-tasks <- mapM mkTask ns
+      let tasks' = fmap (\x -> x {pipeIn = inh}) tasks
+      mapM_ (executeTask process) tasks'-}
+      pure (ExitSuccess, process)
+    _ -> undefined
+    )
+
+regex :: Builtin
+regex = ("regex", \args (inh, outh, errh) process -> case inh of
+    NodePipe ref -> do
+      a <- readIORef ref
+      let n = case a of
+            NodeString x -> x
+            ProcessCall x _ -> nodeToString x
+      print $ "input: " <> n
+      let arg = case args of
+                (x:_) -> x
+                _ -> ""
+      let newt :: [String] = getAllTextMatches (T.unpack n =~ T.unpack arg)
+      case outh of
+        NodePipe oref -> writeIORef oref $ Array $ fmap (NodeString . T.pack) newt
+        Terminal -> putStrLn $ unwords newt
+        _ -> pure ()
+      pure (ExitSuccess, process)
+    _ -> do
+      errHandle <- case errh of
+        Terminal -> pure stdin
+        File fname mode -> openFile fname mode
+        _ -> undefined
+      let writeErr = T.hPutStr errHandle
+      writeErr "invalid argument"
+      pure (ExitFailure $ -1, process)
   )
 
 animateMovement :: [String] -> IO ()
@@ -170,6 +426,7 @@ count xs find = length (filter (== find) xs)
 dedup :: Ord a => [a] -> [a]
 dedup = map head . group . sort
 
+{-
 wrapped :: Builtin
 wrapped = ("wrapped", \_ process -> do
     let conf = shellConfig process
@@ -190,7 +447,7 @@ wrapped = ("wrapped", \_ process -> do
 
     pure process
   )
-
+-}
 
 readHistory :: IO FilePath -> IO [T.Text]
 readHistory f2 = f2 >>= (\f -> fileExist f >>= \x -> unless x (void $ trace ("creating a history file: `" ++ f ++ "`") $ createFile f (ownerReadMode B..|. ownerWriteMode) >>= closeFd) >> TIO.readFile f <&> reverse . T.split (=='\n'))
@@ -204,7 +461,8 @@ exitAction (ShellProcess {}) = exitSuccess
 
 -- BUG: it doesn't display the current input, making clear with prompt yield weird results
 clearAction :: Action
-clearAction proc = let config = shellConfig proc; d = (T.length (input config) - cursorLoc config) in putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt config $ colorScheme config) >> when (d>0) (moveCursor DRight d) >> autocompleteRedraw proc $> proc
+clearAction proc = let config = shellConfig proc; d = (T.length (input config) - cursorLoc config) in putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt config $ colorScheme config) >> 
+                   when (d>0) (moveCursor DRight d) {->> autocompleteRedraw proc-} $> proc
 
 displayPrompt :: Prompt -> IO ()
 displayPrompt = \case 
@@ -228,20 +486,25 @@ nix = CompRule "nix" (\t -> pure $ filter (\(CompRule i _) -> t `T.isPrefixOf` i
         _ -> undefined
 -}
 
-cdCompletion :: CompletionRule
-cdCompletion = CompRule "cd" $ fileCompletion ((<&> isDirectory) . getFileStatus) $ const (pure [])
+--cdCompletion :: CompletionRule
+--cdCompletion = CompRule "cd" $ fileCompletion ((<&> isDirectory) . getFileStatus) $ const (pure [])
 
+{-
 instance Def [CompletionRule] where
   def = [
       --nix
       cdCompletion
     , fileListCompletion ((<&> isRegularFile) . getFileStatus) "cat"
     ]
+-}
 
 instance Def [Builtin] where
   def = [
       cd
-    , wrapped
+    --, wrapped
+    , bmap
+    , regex
+    , table
     ]
 
 data ShellConfig = ShellConfig
@@ -265,10 +528,10 @@ data ShellConfig = ShellConfig
   
   , builtins    :: [Builtin]
 
-  , autocomplete:: AutocompleteConfig
+  --, autocomplete:: AutocompleteConfig
   , cursorConfig:: CursorConfig
 
-  , completionRules :: [CompletionRule]
+  --, completionRules :: [CompletionRule]
   }
 
 instance Def ShellConfig where
@@ -290,17 +553,18 @@ instance Def ShellConfig where
 
     , builtins = def
 
-    , autocomplete = def
+    --, autocomplete = def
     , cursorConfig = def
-    , completionRules = def
+    --, completionRules = def
     }
 
 executablelist :: ShellProcess -> [T.Text]
 executablelist proc = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache proc) "executables" >>= \x -> lookupCache x "execs")
 
+{-
 mdata :: ShellProcess -> AutocompleteModelData
 mdata proc = let c = shellConfig proc in AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
               historyL = history c, executableList = executablelist proc, builtinNames = fmap fst (builtins c), 
               modelOutput = ([],[]), mCompletionRules = completionRules c}
-
-autocompleteRedraw proc' = let c = shellConfig proc' in model (autocomplete c) (mdata proc') >>= \x -> forceRedraw (autocomplete c) $ (mdata proc') {modelOutput = x}
+-}
+--autocompleteRedraw proc' = let c = shellConfig proc' in model (autocomplete c) (mdata proc') >>= \x -> forceRedraw (autocomplete c) $ (mdata proc') {modelOutput = x}

@@ -5,7 +5,7 @@ import System.Posix (getEffectiveUserName)
 
 
 import FokShell
-import ExposedTypes
+import FokShell.Types
 import Lib.ColorScheme
 import Lib.Primitive
 import Lib.Format
@@ -18,7 +18,7 @@ import Control.Monad (when)
 import Data.Functor
 
 import Network.HostName
-import Lib.Autocomplete (AutocompleteConfig(AutocompleteConfig, redrawHook, model), languageHook, languageModel)
+--import Lib.Autocomplete (AutocompleteConfig(AutocompleteConfig, redrawHook, model), languageHook, languageModel)
 
 myHooks :: ShellHooks
 myHooks = def
@@ -95,7 +95,7 @@ main = do
       ((control, Character "t"), \proc -> 
         let config = shellConfig proc in let conf = config {colorScheme = nextColorScheme (colorScheme config)} in redraw conf $> proc {shellConfig = conf})
     ]
-    , autocomplete = def
+--    , autocomplete = def
     }
     where
       index cur = indexOf cur colorSchemes + 1

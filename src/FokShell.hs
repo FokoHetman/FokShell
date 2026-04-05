@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings,LambdaCase #-}
 module FokShell where
 
-import InputHandling (nextEvent)
+import FokShell.InputHandling (nextEvent)
+import FokShell.JobManager
 
 import qualified Data.Text as T
 import System.Exit (exitSuccess)
@@ -14,10 +15,10 @@ import System.Posix.Signals
 import Control.Concurrent.MVar
 import Data.IORef (newIORef, IORef, writeIORef, readIORef)
 
-import JobManager
-import ExposedTypes
+import FokShell.JobManager
+import FokShell.Types
 import Lib.Format
-import Lib.Autocomplete
+--import Lib.Autocomplete
 import Lib.Primitive
 import Lib.Keys
 import Lib.Config
@@ -96,10 +97,10 @@ parseEvent proc key = do
               Just (i, r) -> let j = max 0 (i-1) in conf {historyIndex = Just (j, r), input = history conf!!j}
             )
 
-    (KeyModifiers 0, Tab) -> bool (pure proc) (model (autocomplete conf) (moddata conf) >>= (\case
+    {-(KeyModifiers 0, Tab) -> bool (pure proc) (model (autocomplete conf) (moddata conf) >>= (\case
           [] -> pure proc
           (x:_)-> (putStr . T.unpack) (differ (curWord conf) x) >> hFlush stdout $> proc {shellConfig = replaceCurrent x conf}
-        ) . fst) (cursorIndex conf == Just 0)
+        ) . fst) (cursorIndex conf == Just 0)-}
 
     (KeyModifiers 1 {-control-}, Arrow d) -> case d of
         DLeft   -> moveCursor' conf DLeft (n DLeft) $> proc {shellConfig = conf {cursorLoc = cursorLoc conf + n DLeft}}
@@ -141,20 +142,22 @@ parseEvent proc key = do
       pure $ proc {shellConfig = addToInput conf rawKey}
     _ -> do 
       let bind = filter (\x -> fst x == key) $ binds conf
-      unwrapBind bind proc
+      case bind of
+        (x:_) -> snd x proc
+        _ -> pure proc
   
 
-  bool (autocompleteRedraw out) (pure ()) (colorScheme (shellConfig out) == colorScheme conf)
-  bool (autocompleteOverrides out) (pure ()) (input (shellConfig out) == input conf)
+  --bool (autocompleteRedraw out) (pure ()) (colorScheme (shellConfig out) == colorScheme conf)
+  --bool (autocompleteOverrides out) (pure ()) (input (shellConfig out) == input conf)
   --autocompleteOverrides out
   pure $ updateWithKey key out
   where
-    moddata c = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
+    {-moddata c = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
               historyL = history c, executableList = executablelist', builtinNames = fmap fst (builtins c), 
-              modelOutput = ([],[]), mCompletionRules = completionRules c}
+              modelOutput = ([],[]), mCompletionRules = completionRules c}-}
 
 
-    getIndexes c = extract' (input c) (cursorLoc c)
+    {-getIndexes c = extract' (input c) (cursorLoc c)
     cursorIndex c = snd $ getIndexes c
     matchIndex c = fst $ getIndexes c
     curWord c = fromMaybe "" $ case runParser parseExpr (input c) of
@@ -182,20 +185,16 @@ parseEvent proc key = do
     --curWordI c = curWordI' (cursorLoc c) 0 $ T.words $ T.reverse (input c)
     --curWordI' i y (x:xs) = if T.length x > i then y else curWordI' (i-T.length x) (y+1) xs
     --curWordI' i y _ = y
-   
-    unwrapBind [x] defval = snd x defval
-    unwrapBind [] defval = pure defval
-    unwrapBind _ _ = undefined
+    -}
     addToInput c t = c {input = T.concat [left, t, right]}
       where
         loc = cursorLoc c 
         inp = input c
         right = T.reverse $ T.take loc $ T.reverse inp
         left  = T.take (T.length inp - T.length right) inp
-
     
     executablelist' :: [T.Text]
     executablelist' = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache proc) "executables" >>= \x -> lookupCache x "execs")
 
-    autocompleteOverrides proc' = let c = shellConfig proc' in model (autocomplete c) (moddata c) >>= \x -> redrawHook (autocomplete c) $ (moddata c) {modelOutput = x}
+    --autocompleteOverrides proc' = let c = shellConfig proc' in model (autocomplete c) (moddata c) >>= \x -> redrawHook (autocomplete c) $ (moddata c) {modelOutput = x}
 
