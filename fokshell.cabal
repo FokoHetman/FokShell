@@ -69,6 +69,7 @@ library
                     , Lib.Config
                     , Lib.Keys
                     , Language.Parser
+                    , Language.Autocomplete
 --                    , FokShell.InputHandling
 --                    , JobManager
 

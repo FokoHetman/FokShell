@@ -11,7 +11,7 @@ import Data.Dynamic (Dynamic, fromDynamic)
 import Lib.Keys
 import Lib.Format
 import System.Process
-
+import Language.Autocomplete
 
 import Data.ByteString qualified as BS
 
@@ -60,10 +60,6 @@ data Task = Task {
 , condition   :: ExitCode -> Bool
 }
 
-nodeToString :: Node -> T.Text
-nodeToString (NodeString s) = s
-nodeToString (ProcessCall x xs) = nodeToString x <> T.concat (fmap nodeToString xs)
-nodeToString x = traceShow x undefined
 mkTask' :: T.Text -> Maybe (IO Task)
 mkTask' t = runParser parseSeq t <&> mkTask . snd
 
@@ -486,17 +482,17 @@ nix = CompRule "nix" (\t -> pure $ filter (\(CompRule i _) -> t `T.isPrefixOf` i
         _ -> undefined
 -}
 
---cdCompletion :: CompletionRule
---cdCompletion = CompRule "cd" $ fileCompletion ((<&> isDirectory) . getFileStatus) $ const (pure [])
+cdCompletion :: CompletionRule
+cdCompletion = CompRule "cd" $ fileCompletion ((<&> isDirectory) . getFileStatus) $ const (pure [])
 
-{-
+
 instance Def [CompletionRule] where
   def = [
       --nix
       cdCompletion
     , fileListCompletion ((<&> isRegularFile) . getFileStatus) "cat"
     ]
--}
+
 
 instance Def [Builtin] where
   def = [
@@ -528,10 +524,10 @@ data ShellConfig = ShellConfig
   
   , builtins    :: [Builtin]
 
-  --, autocomplete:: AutocompleteConfig
+  , autocomplete:: AutocompleteConfig
   , cursorConfig:: CursorConfig
 
-  --, completionRules :: [CompletionRule]
+  , completionRules :: [CompletionRule]
   }
 
 instance Def ShellConfig where
@@ -553,9 +549,9 @@ instance Def ShellConfig where
 
     , builtins = def
 
-    --, autocomplete = def
+    , autocomplete = def
     , cursorConfig = def
-    --, completionRules = def
+    , completionRules = def
     }
 
 executablelist :: ShellProcess -> [T.Text]

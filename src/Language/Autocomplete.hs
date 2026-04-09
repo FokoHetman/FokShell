@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings, LambdaCase #-}
-module Lib.Autocomplete where
+module Language.Autocomplete where
 
 import qualified Data.Text as T
 import Lib.Primitive
@@ -21,7 +21,7 @@ import System.Environment (lookupEnv, getEnvironment)
 import Data.Bifunctor (Bifunctor(bimap, second))
 import Debug.Trace (traceShow)
 
-
+{-
 type AutocompleteModel = AutocompleteModelData -> IO ([T.Text], [T.Text])
 
 findArg' :: (Int -> Int) -> [StringComplex] -> Int -> Maybe (Int, (Int,T.Text))
@@ -131,17 +131,6 @@ extract' input cursor = case runParser parseExpr input of
         Just (x,y)  -> (Just x, Just y)
         Nothing     -> (Nothing, Nothing)
       Nothing    -> (Nothing, Nothing)
-
-data AutocompleteModelData = AutocompleteModelData {
-    modelInput      :: T.Text
-  , cursorLocation  :: Int
-  , aColorScheme    :: ColorScheme
-  , modelOutput     :: ([T.Text], [T.Text])
-  , builtinNames    :: [T.Text]
-  , executableList  :: [T.Text]
-  , historyL        :: [T.Text]
-  , mCompletionRules:: [CompletionRule]
-}
 
 -- (complex, (charindex, ~wordindex))
 findComplex :: [StringComplex] -> Int -> Int -> Maybe (StringComplex,(Int,Int))
@@ -376,20 +365,6 @@ resetCursor t i = when (T.length t > i) $ moveCursor DLeft (T.length t - i)
 eraseRight :: IO ()
 eraseRight = putStrf "\ESC[0K"
 
-
-data AutocompleteConfig = AutocompleteConfig {
-    model      :: AutocompleteModel
-  , redrawHook :: AutocompleteModelData -> IO ()
-  , forceRedraw:: AutocompleteModelData -> IO ()
-  }
-
-instance Def AutocompleteConfig where
-  def = AutocompleteConfig {
-    model = languageModel
-  , redrawHook = languageHook
-  , forceRedraw = langForceRedraw
-  }
-
 countLeadingWhitespace :: T.Text -> Int
 countLeadingWhitespace t
       | T.null t  = 0
@@ -466,3 +441,86 @@ langAsAnsi rules t colorScheme cursor executables = case runParser parseExpr t o
     _ -> undefined
   Nothing -> (\x y z -> x<>y<>z) <$> (err <&> asciiColor) <*> pure t <*> pure "\ESC[0m"
     where err = errorColor colorScheme
+-}
+
+countMultiple :: T.Text -> T.Text -> Int
+countMultiple w t
+            | T.null t = 0
+            | T.elem (T.head t) w = 1 + countMultiple w (T.tail t)
+            | otherwise = countMultiple w $ T.tail t
+extractData :: Node -> Int -> (Node, T.Text, Int, [T.Text])
+extractData (ProcessCall e args) c = (ProcessCall e args, l!!currentI, index, take currentI l)
+  where
+    l = fmap nodeToString $ e:args
+    (currentI, index) = findCurrent l c
+    findCurrent [_] c = (0, c)
+    findCurrent (x:xs) c = bool (0, c) (first (1 +) $ findCurrent xs ( c - T.length x)) (T.length x < c)
+extractData (Sequence left right) c = bool (extractData left c) (extractData right (c - nlength left - 1)) (c > nlength left)
+extractData (And left right) c = bool (extractData left c) (extractData right (c - nlength left - 2)) (c > nlength left)
+extractData (Pipe ps left right) c = bool (extractData left c) (extractData right (c - nlength left - pipelength ps)) (c > nlength left)
+
+
+extractData' :: Node -> T.Text -> Int -> (Node, T.Text, Int, [T.Text])
+extractData' n t c = extractData n c'
+  where
+    leftInput = T.take (T.length t - c) t
+    wsCount = countMultiple " '\"" leftInput
+    c' = T.length t - c - wsCount
+
+languageModel :: AutocompleteModel
+languageModel mdata = case runParser parseSeq input of
+  Just (_,n) -> do
+    let ((ProcessCall e args), curArg, curInd, prevArgs) = extractData n cursor'
+    let rule = lookupRule (nodeToString e) mdata.mCompletionRules
+    argMatches <- case rule of
+          Just r -> case prevArgs of
+            [] -> case filter (T.isPrefixOf curArg) execs of
+              [] -> pure []
+              x  -> pure x
+            (_exec:xs) -> fmap (\(CompRule e _) -> e) <$> nestNTimes r (xs ++ [curArg]) (length xs)
+          Nothing -> fileMatches curArg
+    pure (argMatches, [])
+  Nothing -> pure ([],[])
+  where
+    input = mdata.modelInput
+    loc = T.length input - mdata.cursorLocation
+    leftInput = T.take loc input
+    wsCount = countMultiple " '\"" leftInput
+    -- | cursor independent of whitespace, perfect for use with my Parser
+    cursor' = loc - wsCount
+    execs = mdata.executableList ++ mdata.builtinNames
+
+    fileMatches exec = let 
+        d = takeDirectory (T.unpack exec)
+      in ((&&) <$> doesDirectoryExist d <*> (getPermissions d <&> readable)) >>= 
+        bool (pure []) (getDirectoryContents d <&> filter (T.isPrefixOf exec) . (bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` exec) <$>) . fmap T.pack)
+
+languageHook :: AutocompleteModelData -> IO ()
+languageHook = undefined
+
+languageFullRedraw :: AutocompleteModelData -> IO ()
+languageFullRedraw = undefined
+type AutocompleteModel = AutocompleteModelData -> IO ([T.Text], [T.Text])
+data AutocompleteModelData = AutocompleteModelData {
+    modelInput      :: T.Text
+  , cursorLocation  :: Int
+  , aColorScheme    :: ColorScheme
+  , modelOutput     :: ([T.Text], [T.Text])
+  , builtinNames    :: [T.Text]
+  , executableList  :: [T.Text]
+  , historyL        :: [T.Text]
+  , mCompletionRules:: [CompletionRule]
+}
+
+data AutocompleteConfig = AutocompleteConfig {
+    model      :: AutocompleteModel
+  , redrawHook :: AutocompleteModelData -> IO ()
+  , fullRedraw :: AutocompleteModelData -> IO ()
+  }
+
+instance Def AutocompleteConfig where
+  def = AutocompleteConfig {
+    model = languageModel
+  , redrawHook = languageHook
+  , fullRedraw = languageFullRedraw
+  }

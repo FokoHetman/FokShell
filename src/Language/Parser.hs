@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 module Language.Parser where
 
 import Data.Map qualified as Map
@@ -6,6 +7,11 @@ import Control.Applicative
 import Data.Char (isSpace)
 import Data.Tuple (swap)
 import Data.Bool (bool)
+import Data.Functor
+import System.Directory
+import System.FilePath
+import Control.Monad (filterM)
+import Debug.Trace (traceShow)
 
 data StdMode = Stdout | Stderr deriving (Eq, Ord, Show)
 data PipeType = ProcessPipe | Write StdMode | Append StdMode | Read deriving (Eq, Ord, Show)
@@ -39,6 +45,18 @@ instance Monad Parser where
     runParser (f a) rest
 
 
+nodeToString :: Node -> T.Text
+nodeToString (NodeString s) = s
+nodeToString (ProcessCall x xs) = nodeToString x <> T.concat (fmap nodeToString xs)
+nodeToString x = traceShow x undefined
+
+nlength :: Node -> Int
+nlength = undefined
+
+pipelength :: PipeType -> Int
+pipelength t
+            | t `elem` [ProcessPipe, Write Stdout, Write Stderr, Read] = 1
+            | t `elem` [Append Stdout, Append Stderr] = 2
 pipe :: Parser Node
 pipe = f (Append Stdout) (stringP ">>")
       <|> f (Write Stderr) (stringP ">2")
@@ -130,3 +148,56 @@ sepBy :: Parser a
       -> Parser [b]
 sepBy sep element = (:) <$> element <*> many (sep *> element) <|> pure []
 
+
+
+data CompletionRule = CompRule T.Text (T.Text -> IO [CompletionRule])
+
+instance Show CompletionRule where
+  show (CompRule x _) = "CompRule `" ++ T.unpack x ++ "`"
+
+
+unwrapArgs :: CompletionRule -> [T.Text] -> IO [CompletionRule]
+unwrapArgs (CompRule _ f) [t] = f t
+unwrapArgs (CompRule _ f) (t:ts) = f t >>= \case
+    [CompRule x f2] -> if x==t then unwrapArgs (CompRule x f2) ts else pure []
+    _ -> pure []
+unwrapArgs _ [] = pure []
+-- todo: add completions and file cache to this
+isValidArgument :: [CompletionRule] -> [T.Text] -> IO Bool
+isValidArgument rules (executable:args') = case lookupRule executable rules of
+  Just (CompRule x f) -> unwrapArgs (CompRule x f) args' <&> \case
+    [CompRule x2 _] -> x2==last args'
+    _   -> False
+  Nothing             -> pure True
+isValidArgument _ [] = pure True
+
+lookupRule :: T.Text -> [CompletionRule] -> Maybe CompletionRule
+lookupRule t (CompRule x f:xs) = bool (lookupRule t xs) (Just $ CompRule x f) (t==x)
+lookupRule _ [] = Nothing
+
+
+nestNTimes :: CompletionRule -> [T.Text] -> Int -> IO [CompletionRule]
+nestNTimes (CompRule _ f) (t:_) 0 = f t
+nestNTimes (CompRule _ f) (t:ts) n = f t >>= \case
+  [CompRule t2 f2] -> if t==t2 then nestNTimes (CompRule t2 f2) ts (n-1) else pure []
+  _ -> pure []
+nestNTimes _ [] _ = pure []
+
+
+
+fileCompletion :: (FilePath -> IO Bool) -> (T.Text -> IO [CompletionRule]) -> (T.Text -> IO [CompletionRule])
+fileCompletion filtre nest t = do
+    let d = takeDirectory $ T.unpack t
+    exists <- doesDirectoryExist d
+    if exists then getPermissions d >>= \x ->
+      if readable x then do
+        localFiles <- getDirectoryContents d >>= filterM (filtre . (d</>))
+        let matches = filter (T.isPrefixOf t) $ bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` t) <$> fmap T.pack localFiles
+        pure $ fmap (`CompRule` nest) matches
+      else pure []
+    else pure []
+fileCompletionRec :: (FilePath -> IO Bool) -> T.Text -> IO [CompletionRule]
+fileCompletionRec filtr = fileCompletion filtr (fileCompletionRec filtr)
+
+fileListCompletion :: (FilePath -> IO Bool) -> T.Text -> CompletionRule
+fileListCompletion filtr = (`CompRule` fileCompletionRec filtr)

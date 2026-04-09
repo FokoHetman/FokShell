@@ -26,7 +26,9 @@ import Lib.Config
 import Data.Dynamic (fromDynamic)
 import Data.Maybe (fromMaybe)
 import Data.Bool (bool)
-import Language.Parser (Parser(runParser), parseExpr)
+import Language.Parser (Parser(runParser), parseExpr, parseSeq)
+import Language.Autocomplete
+import Debug.Trace (traceShow)
 
 
 handleSignal :: IORef ShellProcess -> MVar () -> IO ()
@@ -97,10 +99,10 @@ parseEvent proc key = do
               Just (i, r) -> let j = max 0 (i-1) in conf {historyIndex = Just (j, r), input = history conf!!j}
             )
 
-    {-(KeyModifiers 0, Tab) -> bool (pure proc) (model (autocomplete conf) (moddata conf) >>= (\case
+    (KeyModifiers 0, Tab) -> bool (pure proc) (model (conf.autocomplete) (moddata conf) >>= (\case
           [] -> pure proc
-          (x:_)-> (putStr . T.unpack) (differ (curWord conf) x) >> hFlush stdout $> proc {shellConfig = replaceCurrent x conf}
-        ) . fst) (cursorIndex conf == Just 0)-}
+          (x:_)-> {- kindly assume curWord len >0 -} moveCursor DLeft (T.length $ curWord conf) >> putStrf x >> hFlush stdout $> proc {shellConfig = replaceCurrent x conf}
+        ) . fst) (T.length (curWord conf) - curWordI conf == 0)
 
     (KeyModifiers 1 {-control-}, Arrow d) -> case d of
         DLeft   -> moveCursor' conf DLeft (n DLeft) $> proc {shellConfig = conf {cursorLoc = cursorLoc conf + n DLeft}}
@@ -152,11 +154,16 @@ parseEvent proc key = do
   --autocompleteOverrides out
   pure $ updateWithKey key out
   where
-    {-moddata c = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
+    moddata c = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
               historyL = history c, executableList = executablelist', builtinNames = fmap fst (builtins c), 
-              modelOutput = ([],[]), mCompletionRules = completionRules c}-}
+              modelOutput = ([],[]), mCompletionRules = completionRules c}
 
-
+    curWord c = case runParser parseSeq c.input of
+      Just (_,n) -> (\(_,c',_,_) -> c') $ extractData' n c.input c.cursorLoc
+      Nothing    -> ""
+    curWordI c = case runParser parseSeq c.input of
+      Just (_,n) -> (\(_,_,c',_) -> c') $ extractData' n c.input c.cursorLoc
+      Nothing    -> 0
     {-getIndexes c = extract' (input c) (cursorLoc c)
     cursorIndex c = snd $ getIndexes c
     matchIndex c = fst $ getIndexes c
@@ -166,26 +173,19 @@ parseEvent proc key = do
         Nothing -> Nothing
       Nothing -> Nothing
     --curWord c = maybe "" (reverse (T.words $ input c)!!) (matchIndex c)
-
+    -}
     replaceCurrent :: T.Text -> ShellConfig -> ShellConfig
     replaceCurrent with c = c {input = ninput}
       where
         t = input c
         i = cursorLoc c
-        (curWordLeft, curWordRight) = case (curWord c, cursorIndex c) of
-          (x, Just y) -> (T.take (T.length x - y) x, T.reverse $ T.take y $ T.reverse x)
-          _ -> ("", "")
+        curword = curWord c
 
-        left = bool "" (T.take (T.length t - i - T.length curWordLeft) t) (T.length t > i)
-        right = T.reverse $ T.take (i - T.length curWordRight) $ T.reverse t
+        left = T.take (T.length t - T.length curword - i) t
+        right = T.reverse $ T.take i $ T.reverse t
+        
         ninput =  left <> with <> right
-        --ws = reverse $ T.words (input c)
-        --new_ws = take (curWordI c - 1) ws ++ with:take (length ws - curWordI c - 1) ws
 
-    --curWordI c = curWordI' (cursorLoc c) 0 $ T.words $ T.reverse (input c)
-    --curWordI' i y (x:xs) = if T.length x > i then y else curWordI' (i-T.length x) (y+1) xs
-    --curWordI' i y _ = y
-    -}
     addToInput c t = c {input = T.concat [left, t, right]}
       where
         loc = cursorLoc c 
