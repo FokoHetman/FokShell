@@ -111,9 +111,12 @@ instance Module' TabCompletion ShellProcess where
         right = T.reverse $ T.take i $ T.reverse t
         
         ninput =  left <> with <> right
-  postHook' tc p = model (conf.autocomplete) (moddata p) >>= \x -> (cleanPrevious conf.input >> when (tc.mode == Selection) (displayCompletions conf.input (fst x) tc.selected) $> (tc {completions = fst x}, p))
+  postHook' tc p = model (conf.autocomplete) (moddata p) >>= \x -> (cleanPrevious conf.input >> when (tc.mode == Selection) (displayCompletions (curWord conf) (fst x) tc.selected) $> (tc {completions = fst x}, p))
     where
       conf = p.shellConfig
+      curWord c = case runParser parseSeq c.input of
+        Just (_,n) -> (\(_,c',_,_) -> c') $ extractData' n c.input c.cursorLoc
+        Nothing    -> ""
 
 moddata :: ShellProcess -> AutocompleteModelData
 moddata p = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c,
