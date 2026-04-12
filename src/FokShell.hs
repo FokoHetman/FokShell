@@ -29,6 +29,7 @@ import Data.Bool (bool)
 import Language.Parser (Parser(runParser), parseExpr, parseSeq)
 import Language.Autocomplete
 import Debug.Trace (traceShow)
+import FokShell.Module (chainHook, initHook, postHook, preHook, chainEventHook)
 
 
 handleSignal :: IORef ShellProcess -> MVar () -> IO ()
@@ -51,7 +52,8 @@ fokshell config = do
   doStart <- startHook (hooks config) proc
   unless doStart exitSuccess
 
-  shellProcRef <- newIORef proc
+  (modules, p) <- chainHook proc.shellConfig.modules proc initHook
+  shellProcRef <- newIORef p {shellConfig = p.shellConfig {modules = modules}}
 
   done <- newEmptyMVar
   _ <- installHandler sigINT (Catch $ handleSignal shellProcRef done) Nothing
@@ -59,7 +61,6 @@ fokshell config = do
   displayPrompt $ prompt config $ colorScheme config
   updateCursorShape config
   eventLoop shellProcRef
-
 
 eventLoop :: IORef ShellProcess -> IO ()
 eventLoop procRef = do
@@ -73,90 +74,99 @@ eventLoop procRef = do
   eventLoop procRef
 
 
+bool' a b c = bool b c a
+
 parseEvent :: ShellProcess -> KeyEvent -> IO ShellProcess 
-parseEvent proc key = do 
-  let conf = shellConfig proc
-  let state = shellState proc
-  let cache = shellCache proc
-  out <- case key of
-  -- KEYS
-    (KeyModifiers 0, Arrow d) -> case d of
-        DLeft   -> moveCursor' conf DLeft  1 $> proc {shellConfig = conf {cursorLoc = min (cursorLoc conf + 1) (T.length $ input conf)}}
-        DRight  -> moveCursor' conf DRight 1 $> proc {shellConfig = conf {cursorLoc = max (cursorLoc conf - 1) 0}}
-        Up      -> when (T.length (input conf) - cursorLoc conf > 0 ) (moveCursor' conf DLeft (T.length (input conf) - cursorLoc conf)) >> 
-          (\x ->  redrawFromCursor x {cursorLoc = T.length $ input x} >>  moveCursor' x {cursorLoc = T.length $ input x} DRight (T.length $ input x) $> proc {shellConfig = x {cursorLoc = 0}})
-            (case historyIndex conf of
-            Nothing -> case history conf of 
-              []      -> conf
-              (x:_)  -> conf {historyIndex = Just (0, input conf), input = x}
-            Just (i, r) -> let j = min (length (history conf) - 1) (i+1) in conf {historyIndex = Just (j, r), input = history conf!!j}
-            )
-        Down      -> when (T.length (input conf) - cursorLoc conf > 0 ) (moveCursor' conf DLeft (T.length (input conf) - cursorLoc conf)) >>
-          (\x -> redrawFromCursor x {cursorLoc = T.length $ input x} >> moveCursor' x {cursorLoc = T.length $ input x} DRight (T.length $ input x) $> proc {shellConfig = x {cursorLoc = 0}})
-            (case historyIndex conf of
-              Nothing -> conf
-              Just (0, r) -> conf {historyIndex = Nothing, input = r}
-              Just (i, r) -> let j = max 0 (i-1) in conf {historyIndex = Just (j, r), input = history conf!!j}
-            )
+parseEvent proc' key = do 
+  (b, (modules, proc'')) <- chainEventHook proc'.shellConfig.modules proc' preHook key
+  let proc = proc'' {shellConfig = proc''.shellConfig {modules=modules}}
+  out <- bool' b (pure proc) $ do
+    let conf = shellConfig proc
+    let state = shellState proc
+    let cache = shellCache proc
+    case key of
+      -- KEYS
+      (KeyModifiers 0, Arrow d) -> case d of
+          DLeft   -> moveCursor' conf DLeft  1 $> proc {shellConfig = conf {cursorLoc = min (cursorLoc conf + 1) (T.length $ input conf)}}
+          DRight  -> moveCursor' conf DRight 1 $> proc {shellConfig = conf {cursorLoc = max (cursorLoc conf - 1) 0}}
+          Up      -> when (T.length (input conf) - cursorLoc conf > 0 ) (moveCursor' conf DLeft (T.length (input conf) - cursorLoc conf)) >> 
+            (\x ->  redrawFromCursor x {cursorLoc = T.length $ input x} >>  moveCursor' x {cursorLoc = T.length $ input x} DRight (T.length $ input x) $> proc {shellConfig = x {cursorLoc = 0}})
+              (case historyIndex conf of
+              Nothing -> case history conf of 
+                []      -> conf
+                (x:_)  -> conf {historyIndex = Just (0, input conf), input = x}
+              Just (i, r) -> let j = min (length (history conf) - 1) (i+1) in conf {historyIndex = Just (j, r), input = history conf!!j}
+              )
+          Down      -> when (T.length (input conf) - cursorLoc conf > 0 ) (moveCursor' conf DLeft (T.length (input conf) - cursorLoc conf)) >>
+            (\x -> redrawFromCursor x {cursorLoc = T.length $ input x} >> moveCursor' x {cursorLoc = T.length $ input x} DRight (T.length $ input x) $> proc {shellConfig = x {cursorLoc = 0}})
+              (case historyIndex conf of
+                Nothing -> conf
+                Just (0, r) -> conf {historyIndex = Nothing, input = r}
+                Just (i, r) -> let j = max 0 (i-1) in conf {historyIndex = Just (j, r), input = history conf!!j}
+              )
 
-    (KeyModifiers 0, Tab) -> bool (pure proc) (model (conf.autocomplete) (moddata conf) >>= (\case
-          [] -> pure proc
-          (x:_)-> {- kindly assume curWord len >0 -} moveCursor DLeft (T.length $ curWord conf) >> putStrf x >> hFlush stdout $> proc {shellConfig = replaceCurrent x conf}
-        ) . fst) (T.length (curWord conf) - curWordI conf == 0)
+      {-(KeyModifiers 0, Tab) -> bool (pure proc) (model (conf.autocomplete) (moddata conf) >>= (\case
+            [] -> pure proc
+            [x] -> {- kindly assume curWord len >0 -} moveCursor DLeft (T.length $ curWord conf) >> putStrf x >> hFlush stdout $> proc {shellConfig = replaceCurrent x conf}
+            -- todo: pre-hook, modularize this
+            (x:xs) -> displaySuggestions (x:xs) $> proc {shellConfig = conf {tabMode = Selection, tabSuggestions = x:xs, tabIndex = 0}}
+          ) . fst) (T.null (curWord conf) && T.length (curWord conf) - curWordI conf == 0)-}
 
-    (KeyModifiers 1 {-control-}, Arrow d) -> case d of
-        DLeft   -> moveCursor' conf DLeft (n DLeft) $> proc {shellConfig = conf {cursorLoc = cursorLoc conf + n DLeft}}
-        DRight  -> moveCursor' conf DRight (n DRight) $> proc {shellConfig = conf {cursorLoc = cursorLoc conf - n DRight}}
-        _ -> pure proc
-      where
-        n DLeft = case T.words (snd $ T.splitAt (cursorLoc conf) $ T.reverse $ input conf) of
-          (x:_)   -> T.length x 
-          _       -> 0
-        n DRight = case reverse $ T.words (fst $  T.splitAt (cursorLoc conf) $ T.reverse $ input conf) of
-          (x:_)   -> T.length x 
-          _       -> 0
-        n _ = error "this should NEVER happen."
+      (KeyModifiers 1 {-control-}, Arrow d) -> case d of
+          DLeft   -> moveCursor' conf DLeft (n DLeft) $> proc {shellConfig = conf {cursorLoc = cursorLoc conf + n DLeft}}
+          DRight  -> moveCursor' conf DRight (n DRight) $> proc {shellConfig = conf {cursorLoc = cursorLoc conf - n DRight}}
+          _ -> pure proc
+        where
+          n DLeft = case T.words (snd $ T.splitAt (cursorLoc conf) $ T.reverse $ input conf) of
+            (x:_)   -> T.length x 
+            _       -> 0
+          n DRight = case reverse $ T.words (fst $  T.splitAt (cursorLoc conf) $ T.reverse $ input conf) of
+            (x:_)   -> T.length x 
+            _       -> 0
+          n _ = error "this should NEVER happen."
     
-    (KeyModifiers 0, Enter) -> swallowPrompt (cursorLoc conf) (input conf) (prompt conf $ colorScheme conf) >> 
-        putStrLn "" >> 
-          handleJob proc {shellConfig = conf {history = T.strip (input conf):history conf, historyIndex = Nothing}}
-        <* displayPrompt (prompt conf $ colorScheme conf)
+      (KeyModifiers 0, Enter) -> swallowPrompt (cursorLoc conf) (input conf) (prompt conf $ colorScheme conf) >> 
+          putStrLn "" >> 
+            handleJob proc {shellConfig = conf {history = T.strip (input conf):history conf, historyIndex = Nothing}}
+          <* displayPrompt (prompt conf $ colorScheme conf)
     
-    (KeyModifiers 0, Backspace) -> moveCursor' conf DLeft 1 >> redrawFromCursor nconf $> proc {shellConfig = nconf}
-      where
-        loc = cursorLoc conf 
-        inp = input conf
-        right = T.reverse $ T.take loc $ T.reverse inp
-        left  = T.take (T.length inp - T.length right) inp
-        nconf = conf { input = T.concat [T.dropEnd 1 left, right]}
-    (_, Delete) -> redrawFromCursor nconf $> proc {shellConfig = nconf}
-      where
-        loc = cursorLoc conf 
-        inp = input conf
-        right = T.reverse $ T.take loc $ T.reverse inp
-        left  = T.take (T.length inp - T.length right) inp
-        nconf = conf { input = T.concat [left, T.drop 1 right], cursorLoc = max 0 $ loc - 1}
-    (_, Character "\NUL") -> pure proc
-    (KeyModifiers 0, Character rawKey) -> do
-      putStr $ T.unpack rawKey
-      hFlush stdout
-      redrawFromCursor conf
-      pure $ proc {shellConfig = addToInput conf rawKey}
-    _ -> do 
-      let bind = filter (\x -> fst x == key) $ binds conf
-      case bind of
-        (x:_) -> snd x proc
-        _ -> pure proc
-  
-
+      (KeyModifiers 0, Backspace) -> moveCursor' conf DLeft 1 >> redrawFromCursor nconf $> proc {shellConfig = nconf}
+        where
+          loc = cursorLoc conf 
+          inp = input conf
+          right = T.reverse $ T.take loc $ T.reverse inp
+          left  = T.take (T.length inp - T.length right) inp
+          nconf = conf { input = T.concat [T.dropEnd 1 left, right]}
+      (_, Delete) -> redrawFromCursor nconf $> proc {shellConfig = nconf}
+        where
+          loc = cursorLoc conf 
+          inp = input conf
+          right = T.reverse $ T.take loc $ T.reverse inp
+          left  = T.take (T.length inp - T.length right) inp
+          nconf = conf { input = T.concat [left, T.drop 1 right], cursorLoc = max 0 $ loc - 1}
+      (_, Character "\NUL") -> pure proc
+      (KeyModifiers 0, Character rawKey) -> do
+        putStr $ T.unpack rawKey
+        hFlush stdout
+        redrawFromCursor conf
+        pure $ proc {shellConfig = addToInput conf rawKey}
+      _ -> do 
+        let bind = filter (\x -> fst x == key) $ binds conf
+        case bind of
+          (x:_) -> snd x proc
+          _ -> pure proc
+  (modules, p) <- chainHook out.shellConfig.modules out postHook
   --bool (autocompleteRedraw out) (pure ()) (colorScheme (shellConfig out) == colorScheme conf)
   --bool (autocompleteOverrides out) (pure ()) (input (shellConfig out) == input conf)
   --autocompleteOverrides out
-  pure $ updateWithKey key out
-  where
-    moddata c = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
-              historyL = history c, executableList = executablelist', builtinNames = fmap fst (builtins c), 
+  pure $ updateWithKey key p {shellConfig = p.shellConfig {modules = modules}}
+    where
+    moddata :: ShellProcess -> AutocompleteModelData
+    moddata p = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
+              historyL = history c, executableList = executablelist' p, builtinNames = fmap fst (builtins c), 
               modelOutput = ([],[]), mCompletionRules = completionRules c}
+              where
+              c = p.shellConfig
 
     curWord c = case runParser parseSeq c.input of
       Just (_,n) -> (\(_,c',_,_) -> c') $ extractData' n c.input c.cursorLoc
@@ -193,8 +203,8 @@ parseEvent proc key = do
         right = T.reverse $ T.take loc $ T.reverse inp
         left  = T.take (T.length inp - T.length right) inp
     
-    executablelist' :: [T.Text]
-    executablelist' = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache proc) "executables" >>= \x -> lookupCache x "execs")
+    executablelist' :: ShellProcess -> [T.Text]
+    executablelist' p = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache p) "executables" >>= \x -> lookupCache x "execs")
 
     --autocompleteOverrides proc' = let c = shellConfig proc' in model (autocomplete c) (moddata c) >>= \x -> redrawHook (autocomplete c) $ (moddata c) {modelOutput = x}
 

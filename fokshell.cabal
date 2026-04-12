@@ -61,12 +61,15 @@ library
     exposed-modules:  FokShell
                     , FokShell.JobManager
                     , FokShell.Types
+                    , FokShell.Module
+                    , FokShell.Module.TabCompletion
 --                    , ExposedTypes
                     , Lib.ColorScheme
                     , Lib.Primitive
 --                    , Lib.Autocomplete
                     , Lib.Format
                     , Lib.Config
+                    , Lib.Defaults
                     , Lib.Keys
                     , Language.Parser
                     , Language.Autocomplete

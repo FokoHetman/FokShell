@@ -11,6 +11,7 @@ import Lib.Primitive
 import Lib.Format
 import Lib.Config
 import Lib.Keys
+import Lib.Defaults
 
 import qualified Data.Text as T
 

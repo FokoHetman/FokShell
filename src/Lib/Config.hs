@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings, LambdaCase #-}
 module Lib.Config where
 
---import Lib.Autocomplete
 import Lib.ColorScheme
 import Lib.Primitive
 import qualified Data.Text as T
@@ -42,7 +41,7 @@ import Data.Map qualified as Map
 import Text.Regex.TDFA
 import Text.Regex.TDFA.Text ()
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-
+import FokShell.Module (Module (Module))
 
 exitCodeToInt :: ExitCode -> Int
 exitCodeToInt ExitSuccess     = 0
@@ -202,11 +201,6 @@ newtype CursorConfig = CursorConfig
   { cursorShape :: CursorShape
   }
 
-instance Def CursorConfig where
-  def = CursorConfig { cursorShape = BlinkingBar }
-
-
-
 
 data State = InputOutput
 
@@ -254,27 +248,10 @@ defaultClearHook proc = do
 defaultStartHook :: Hook
 defaultStartHook _ = pure True
 
-instance Def ShellHooks where
-  def = ShellHooks
-    { haltHook  = defaultHaltHook
-    , exitHook  = defaultExitHook
-    , startHook = defaultStartHook
-    , clearHook = defaultClearHook
-    }
-
 data Swallow = Never | Swallowed (IO T.Text)
 data Prompt  = SingleLine (IO T.Text) Swallow | MultiLine (IO [T.Text]) Swallow
 
 type PromptGetter = ColorScheme -> Prompt
-
-
-instance Def [(KeyEvent, Action)] where
-  def = [
-        ((control, Character "c"), \proc -> haltHook (hooks (shellConfig proc)) proc >>= \x -> if x then haltAction proc else pure proc)
-      , ((control, Character "d"), \proc -> exitHook (hooks (shellConfig proc)) proc >>= \x -> if x then exitAction proc else pure proc)
-      , ((control, Character "l"), \proc -> clearHook(hooks (shellConfig proc)) (proc {shellConfig = (shellConfig proc) {trigger=(control, Character "l")}}) >>= \x -> if x then clearAction proc else pure proc)
-    ]
-
 
 type Builtin = (T.Text, [T.Text] -> (TaskPipeType, TaskPipeType, TaskPipeType) -> ShellProcess -> IO (ExitCode, ShellProcess))
 
@@ -486,23 +463,6 @@ cdCompletion :: CompletionRule
 cdCompletion = CompRule "cd" $ fileCompletion ((<&> isDirectory) . getFileStatus) $ const (pure [])
 
 
-instance Def [CompletionRule] where
-  def = [
-      --nix
-      cdCompletion
-    , fileListCompletion ((<&> isRegularFile) . getFileStatus) "cat"
-    ]
-
-
-instance Def [Builtin] where
-  def = [
-      cd
-    --, wrapped
-    , bmap
-    , regex
-    , table
-    ]
-
 data ShellConfig = ShellConfig
   { hooks       :: ShellHooks
   , prompt      :: PromptGetter
@@ -528,31 +488,9 @@ data ShellConfig = ShellConfig
   , cursorConfig:: CursorConfig
 
   , completionRules :: [CompletionRule]
+
+  , modules :: [Module ShellProcess]
   }
-
-instance Def ShellConfig where
-  def = ShellConfig
-    { hooks = def
-    , prompt = const $ SingleLine (getFormattedDirectory <&> (<> " > ")) Never
-    , input = ""
-
-    , cursorLoc = 0
-
-    , colorScheme = def
-    , binds = def
-    , lastEvent = (KeyModifiers 0, Escape)
-    , trigger = (KeyModifiers 0, Escape)
-    , jobManager = JobMgr []
-    , history = []
-    , historyIndex = Nothing
-    , getHistory = readHistory defaultHistoryFile
-
-    , builtins = def
-
-    , autocomplete = def
-    , cursorConfig = def
-    , completionRules = def
-    }
 
 executablelist :: ShellProcess -> [T.Text]
 executablelist proc = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache proc) "executables" >>= \x -> lookupCache x "execs")
