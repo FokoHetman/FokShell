@@ -34,7 +34,7 @@ import Control.Concurrent (threadDelay)
 import Data.Bool (bool)
 import Data.Maybe (fromMaybe)
 import Data.Text.IO qualified as T
-import System.IO (openFile, IOMode (WriteMode, AppendMode), stdin)
+import System.IO (openFile, IOMode (WriteMode, AppendMode), stdin, stderr)
 
 import Data.Map qualified as Map
 
@@ -258,7 +258,7 @@ type Builtin = (T.Text, [T.Text] -> (TaskPipeType, TaskPipeType, TaskPipeType) -
 cd :: Builtin
 cd = ("cd", \args (_inh, outh, errh) process -> do
     errHandle <- case errh of
-      Terminal -> pure stdin
+      Terminal -> pure stderr 
       File fname mode -> openFile fname mode
       _ -> undefined
     let writeErr = T.hPutStr errHandle
@@ -376,7 +376,7 @@ regex = ("regex", \args (inh, outh, errh) process -> case inh of
       pure (ExitSuccess, process)
     _ -> do
       errHandle <- case errh of
-        Terminal -> pure stdin
+        Terminal -> pure stderr
         File fname mode -> openFile fname mode
         _ -> undefined
       let writeErr = T.hPutStr errHandle
@@ -484,7 +484,7 @@ data ShellConfig = ShellConfig
   
   , builtins    :: [Builtin]
 
-  , autocomplete:: AutocompleteConfig
+  --, autocomplete:: AutocompleteConfig
   , cursorConfig:: CursorConfig
 
   , completionRules :: [CompletionRule]

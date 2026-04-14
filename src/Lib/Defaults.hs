@@ -67,7 +67,7 @@ instance Def ShellConfig where
 
     , builtins = def
 
-    , autocomplete = def
+    --, autocomplete = def
     , cursorConfig = def
     , completionRules = def
 

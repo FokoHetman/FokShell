@@ -8,7 +8,6 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as T
 import Language.Parser
 import Lib.Config
-import Language.Autocomplete
 import Lib.Primitive
 import Data.Maybe (fromMaybe)
 import Data.Dynamic (fromDynamic)
@@ -19,12 +18,30 @@ import Data.Functor
 import Debug.Trace (traceShow)
 import Data.Bool (bool)
 import Control.Monad (when)
+import Lib.ColorScheme
+
+import Data.Maybe (isJust, fromMaybe, fromJust)
+import Data.Functor
+import System.Directory (findExecutable, getDirectoryContents, getPermissions, Permissions (readable), doesDirectoryExist)
+import Control.Monad (when, unless)
+
+import System.FilePath.Posix ((</>), takeDirectory)
+import Data.Char (isSpace)
+import Data.Bool (bool)
+import Control.Arrow (Arrow(first))
+import Data.List (singleton)
+
+import Language.Parser
+import System.Environment (lookupEnv, getEnvironment)
+import Data.Bifunctor (Bifunctor(bimap, second))
+
 
 data TabContextMode = Disabled | Selection deriving Eq
 data TabCompletion = TabCompletion
   { mode        :: TabContextMode
   , selected    :: Maybe Int
   , completions :: [T.Text]
+  , autocomplete :: AutocompleteConfig
   }
 
 instance Def TabCompletion where
@@ -83,7 +100,7 @@ instance Module' TabCompletion ShellProcess where
                   Nothing -> Just 0
           displayCompletions (curWord p.shellConfig) x sel
           pure (False, (tc {mode = Selection, completions = x, selected = sel}, p))
-      _ -> model (conf.autocomplete) (moddata p) >>= (\case
+      _ -> model (tc.autocomplete) (moddata p) >>= (\case
         [] -> pure (True, (tc {selected = Nothing},p))
         x -> do
           displayCompletions (curWord p.shellConfig) x Nothing
@@ -111,7 +128,7 @@ instance Module' TabCompletion ShellProcess where
         right = T.reverse $ T.take i $ T.reverse t
         
         ninput =  left <> with <> right
-  postHook' tc p = model (conf.autocomplete) (moddata p) >>= \x -> (cleanPrevious conf.input >> when (tc.mode == Selection) (displayCompletions (curWord conf) (fst x) tc.selected) $> (tc {completions = fst x}, p))
+  postHook' tc p = model (tc.autocomplete) (moddata p) >>= \x -> (cleanPrevious conf.input >> when (tc.mode == Selection) (displayCompletions (curWord conf) (fst x) tc.selected) $> (tc {completions = fst x}, p))
     where
       conf = p.shellConfig
       curWord c = case runParser parseSeq c.input of
@@ -124,3 +141,89 @@ moddata p = AutocompleteModelData {modelInput = input c, aColorScheme = colorSch
               modelOutput = ([],[]), mCompletionRules = completionRules c} where c = p.shellConfig
 executablelist' :: ShellProcess -> [T.Text]
 executablelist' p = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache p) "executables" >>= \x -> lookupCache x "execs")
+
+
+
+
+
+countMultiple :: T.Text -> T.Text -> Int
+countMultiple w t
+            | T.null t = 0
+            | T.elem (T.head t) w = 1 + countMultiple w (T.tail t)
+            | otherwise = countMultiple w $ T.tail t
+extractData :: Node -> Int -> (Node, T.Text, Int, [T.Text])
+extractData (ProcessCall e args) c = (ProcessCall e args, l!!currentI, index, take currentI l)
+  where
+    l = fmap nodeToString $ e:args
+    (currentI, index) = findCurrent l c
+    findCurrent [_] c = (0, c)
+    findCurrent (x:xs) c = bool (0, c) (first (1 +) $ findCurrent xs ( c - T.length x)) (T.length x < c)
+extractData (Sequence left right) c = bool (extractData left c) (extractData right (c - nlength left - 1)) (c > nlength left)
+extractData (And left right) c = bool (extractData left c) (extractData right (c - nlength left - 2)) (c > nlength left)
+extractData (Pipe ps left right) c = bool (extractData left c) (extractData right (c - nlength left - pipelength ps)) (c > nlength left)
+
+
+extractData' :: Node -> T.Text -> Int -> (Node, T.Text, Int, [T.Text])
+extractData' n t c = extractData n c'
+  where
+    leftInput = T.take (T.length t - c) t
+    wsCount = countMultiple " '\"" leftInput
+    c' = T.length t - c - wsCount
+
+languageModel :: AutocompleteModel
+languageModel mdata = case runParser parseSeq input of
+  Just (_,n) -> do
+    let ((ProcessCall e args), curArg, curInd, prevArgs) = extractData n cursor'
+    let rule = lookupRule (nodeToString e) mdata.mCompletionRules
+    argMatches <- case rule of
+          Just r -> case prevArgs of
+            [] -> case filter (T.isPrefixOf curArg) execs of
+              [] -> pure []
+              x  -> pure x
+            (_exec:xs) -> fmap (\(CompRule e _) -> e) <$> nestNTimes r (xs ++ [curArg]) (length xs)
+          Nothing -> fileMatches curArg
+    pure (argMatches, [])
+  Nothing -> pure ([],[])
+  where
+    input = mdata.modelInput
+    loc = T.length input - mdata.cursorLocation
+    leftInput = T.take loc input
+    wsCount = countMultiple " '\"" leftInput
+    -- | cursor independent of whitespace, perfect for use with my Parser
+    cursor' = loc - wsCount
+    execs = mdata.executableList ++ mdata.builtinNames
+
+    fileMatches exec = let 
+        d = takeDirectory (T.unpack exec)
+      in ((&&) <$> doesDirectoryExist d <*> (getPermissions d <&> readable)) >>= 
+        bool (pure []) (getDirectoryContents d <&> filter (T.isPrefixOf exec) . (bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` exec) <$>) . fmap T.pack)
+
+languageHook :: AutocompleteModelData -> IO ()
+languageHook = undefined
+
+languageFullRedraw :: AutocompleteModelData -> IO ()
+languageFullRedraw = undefined
+type AutocompleteModel = AutocompleteModelData -> IO ([T.Text], [T.Text])
+data AutocompleteModelData = AutocompleteModelData {
+    modelInput      :: T.Text
+  , cursorLocation  :: Int
+  , aColorScheme    :: ColorScheme
+  , modelOutput     :: ([T.Text], [T.Text])
+  , builtinNames    :: [T.Text]
+  , executableList  :: [T.Text]
+  , historyL        :: [T.Text]
+  , mCompletionRules:: [CompletionRule]
+}
+
+data AutocompleteConfig = AutocompleteConfig {
+    model      :: AutocompleteModel
+  , redrawHook :: AutocompleteModelData -> IO ()
+  , fullRedraw :: AutocompleteModelData -> IO ()
+  }
+
+instance Def AutocompleteConfig where
+  def = AutocompleteConfig {
+    model = languageModel
+  , redrawHook = languageHook
+  , fullRedraw = languageFullRedraw
+  }

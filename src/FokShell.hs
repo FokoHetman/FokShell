@@ -27,7 +27,7 @@ import Data.Dynamic (fromDynamic)
 import Data.Maybe (fromMaybe)
 import Data.Bool (bool)
 import Language.Parser (Parser(runParser), parseExpr, parseSeq)
-import Language.Autocomplete
+--import Language.Autocomplete
 import Debug.Trace (traceShow)
 import FokShell.Module (chainHook, initHook, postHook, preHook, chainEventHook)
 
@@ -44,7 +44,6 @@ fokshell :: ShellConfig -> IO ()
 fokshell config = do
   hSetEcho stdin False
   hSetBuffering stdin NoBuffering
-  
   extractedHistory <- getHistory config
   
   
@@ -161,19 +160,19 @@ parseEvent proc' key = do
   --autocompleteOverrides out
   pure $ updateWithKey key p {shellConfig = p.shellConfig {modules = modules}}
     where
-    moddata :: ShellProcess -> AutocompleteModelData
+    {-moddata :: ShellProcess -> AutocompleteModelData
     moddata p = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
               historyL = history c, executableList = executablelist' p, builtinNames = fmap fst (builtins c), 
               modelOutput = ([],[]), mCompletionRules = completionRules c}
               where
-              c = p.shellConfig
+              c = p.shellConfig-}
 
-    curWord c = case runParser parseSeq c.input of
+    {-curWord c = case runParser parseSeq c.input of
       Just (_,n) -> (\(_,c',_,_) -> c') $ extractData' n c.input c.cursorLoc
       Nothing    -> ""
     curWordI c = case runParser parseSeq c.input of
       Just (_,n) -> (\(_,_,c',_) -> c') $ extractData' n c.input c.cursorLoc
-      Nothing    -> 0
+      Nothing    -> 0-}
     {-getIndexes c = extract' (input c) (cursorLoc c)
     cursorIndex c = snd $ getIndexes c
     matchIndex c = fst $ getIndexes c
@@ -184,7 +183,7 @@ parseEvent proc' key = do
       Nothing -> Nothing
     --curWord c = maybe "" (reverse (T.words $ input c)!!) (matchIndex c)
     -}
-    replaceCurrent :: T.Text -> ShellConfig -> ShellConfig
+    {-replaceCurrent :: T.Text -> ShellConfig -> ShellConfig
     replaceCurrent with c = c {input = ninput}
       where
         t = input c
@@ -194,7 +193,7 @@ parseEvent proc' key = do
         left = T.take (T.length t - T.length curword - i) t
         right = T.reverse $ T.take i $ T.reverse t
         
-        ninput =  left <> with <> right
+        ninput =  left <> with <> right-}
 
     addToInput c t = c {input = T.concat [left, t, right]}
       where

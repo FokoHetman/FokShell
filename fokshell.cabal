@@ -72,7 +72,7 @@ library
                     , Lib.Defaults
                     , Lib.Keys
                     , Language.Parser
-                    , Language.Autocomplete
+                    --, Language.Autocomplete
 --                    , FokShell.InputHandling
 --                    , JobManager
 
