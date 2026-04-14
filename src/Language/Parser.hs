@@ -117,7 +117,7 @@ charP :: Char -> Parser Char
 charP c = satisfy (==c)
 
 specialChars :: String
-specialChars = "=:;{}<|>,!#&/\\\"' "
+specialChars = "=:;{}<|>,!#&\\\"' "
 
 isSpecial :: Char -> Bool
 isSpecial = (`elem` specialChars)
