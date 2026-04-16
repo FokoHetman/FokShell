@@ -11,12 +11,17 @@ import Control.Monad (filterM)
 import System.Directory (getPermissions, Permissions (executable), doesDirectoryExist, canonicalizePath, getDirectoryContents, getHomeDirectory, getCurrentDirectory, doesFileExist)
 import System.FilePath.Posix ((</>))
 
+
+moveCursorRaw :: Direction -> Int -> T.Text
+moveCursorRaw _ 0 = ""
+moveCursorRaw DLeft i = "\ESC[" <> T.pack (show i) <> "D"
+moveCursorRaw DRight i = "\ESC[" <> T.pack (show i) <> "C"
+moveCursorRaw Up i = "\ESC[" <> T.pack (show i) <> "A"
+moveCursorRaw Down i = "\ESC[" <> T.pack (show i) <> "B"
+
+
 moveCursor :: Direction -> Int -> IO ()
-moveCursor _ 0 = pure ()
-moveCursor DLeft i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "D"
-moveCursor DRight i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "C"
-moveCursor Up i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "A"
-moveCursor Down i = putStrf $ T.pack $ "\ESC[" ++ show i ++ "B"
+moveCursor d = T.putStr . moveCursorRaw d
 
 data Direction = Up | Down | DRight | DLeft
     deriving (Show,Eq)

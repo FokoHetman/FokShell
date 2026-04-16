@@ -10,7 +10,6 @@ import Data.Dynamic (Dynamic, fromDynamic)
 import Lib.Keys
 import Lib.Format
 import System.Process
-import Language.Autocomplete
 
 import Data.ByteString qualified as BS
 
@@ -26,13 +25,13 @@ import Data.Functor
 
 import GHC.IO.Handle
 import Language.Parser
-import GHC.IO.Exception (ExitCode (ExitSuccess, ExitFailure))
+import GHC.IO.Exception (ExitCode (ExitSuccess, ExitFailure), IOException (IOError))
 import Control.Monad
 import System.Exit (exitSuccess)
 import Data.List (sort, group, intersperse)
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (threadDelay, forkIO)
 import Data.Bool (bool)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, fromJust)
 import Data.Text.IO qualified as T
 import System.IO (openFile, IOMode (WriteMode, AppendMode), stdin, stderr)
 
@@ -42,12 +41,14 @@ import Text.Regex.TDFA
 import Text.Regex.TDFA.Text ()
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import FokShell.Module (Module (Module))
+import Control.Exception (catch, throwIO)
+import System.IO.Error (isEOFError)
 
 exitCodeToInt :: ExitCode -> Int
 exitCodeToInt ExitSuccess     = 0
 exitCodeToInt (ExitFailure c) = c
 
-data TaskPipeType = File FilePath IOMode | Terminal | NodePipe (IORef Node)
+data TaskPipeType = File FilePath IOMode | Terminal | ProcessData (IORef (Maybe (Either Node Handle)))
 
 data Task = Task {
   procName    :: T.Text
@@ -75,8 +76,8 @@ mkTask (Pipe pt n1 n2) = case pt of
   ProcessPipe -> do
     n2' <- mkTask n2
     n1' <- mkTask n1
-    ref <- newIORef $ NodeString ""
-    pure n2' {pipeIn = NodePipe ref, prevTask = Just $ n1' {pipeOut = NodePipe ref}}
+    ref2 <- newIORef $ Nothing
+    pure n2' {pipeIn = ProcessData ref2, prevTask = Just $ n1' {pipeOut = ProcessData ref2}}
   Write Stdout -> mkFilePipe n1 n2 Stdout WriteMode
   Write Stderr -> mkFilePipe n1 n2 Stderr WriteMode
   Append Stdout -> mkFilePipe n1 n2 Stdout AppendMode
@@ -99,13 +100,13 @@ mkTask (ProcessCall (NodeString pname) args) = pure Task {
 -- | given exit code of prevTask determines whether this task should run
 , condition = const True
 }
-mkTask (Table t) = do 
-  n <- newIORef (Table t)
+mkTask (Table t) = do
+  h <- newIORef $ Just $ Left (Table t)
   pure Task {
     procName = "table"
   , procArgs = []
-  , pipeIn = NodePipe n
-  , pipeOut = NodePipe n
+  , pipeIn = ProcessData h
+  , pipeOut = ProcessData h
   , pipeErr = Terminal
   , prevTask = Nothing
   , condition = const True
@@ -274,12 +275,12 @@ cd = ("cd", \args (_inh, outh, errh) process -> do
 
 table :: Builtin
 table = ("table", \args (inh, outh, errh) process -> case inh of
-      NodePipe ref -> do
-        Table n <- readIORef ref
-        case outh of
-          NodePipe oref -> writeIORef oref (Table n) $> (ExitSuccess, process)
+      ProcessData ref -> readIORef ref >>= \case
+        Just (Left (Table n)) -> case outh of
+          ProcessData oref -> writeIORef oref (Just . Left $ Table n) $> (ExitSuccess, process)
           Terminal -> displayTable n $> (ExitSuccess, process)
           File fname mode -> (openFile fname mode >>= (`T.hPutStr` (tableToJson n))) $> (ExitSuccess, process)
+        _ -> error "hi4"
       _ -> undefined
       )
 
@@ -293,6 +294,23 @@ display' :: (Node, Node) -> T.Text
 display' (n1, n2) = nodeToString n1 <> ": " <> nodeToString n2
 
 
+safeGetChar :: Handle -> IO (Maybe Char)
+safeGetChar h =
+    (Just <$> hGetChar h)
+    `catch` f
+    where
+      f :: IOError -> IO (Maybe Char)
+      f = const $ pure Nothing
+
+forward :: Handle -> Handle -> IO ()
+forward read write = do
+  char <- safeGetChar read
+  case char of
+    Just c -> do
+      hPutChar write c
+      forward read write
+    Nothing -> pure ()
+
 executeTask :: ShellProcess -> Task -> IO (ExitCode, ShellProcess)
 executeTask proc' t = do
   let name = t.procName
@@ -301,79 +319,88 @@ executeTask proc' t = do
   case lookup name builtins of
     Just x  -> x args (t.pipeIn, t.pipeOut, t.pipeErr) proc'
     Nothing -> do
-      (out_h, outpre) <- getPipe t.pipeOut
-      (err_h, errpre) <- getPipe t.pipeErr
-      (in_h , inpre) <- getPipe t.pipeIn
-      (inh, outh, errh, proch) <- createProcess (proc (T.unpack name) $ fmap T.unpack args) { std_out = out_h, std_err = err_h, std_in = in_h }
-      flushPrewritten inh inpre
+      outPipe <- getPipe t.pipeOut
+      errPipe <- getPipe t.pipeErr
+      inPipe <- getPipe t.pipeIn
+      (inh, outh, errh, proch) <- createProcess (proc (T.unpack name) $ fmap T.unpack args) { std_out = outPipe, std_err = errPipe, std_in = inPipe }
+      case t.pipeOut of
+        ProcessData ref -> writeIORef ref $ Right <$> outh
+        _ -> pure ()
+      case t.pipeErr of
+        ProcessData ref -> writeIORef ref $ Right <$> errh
+        _ -> pure ()
+      case t.pipeIn of
+        ProcessData ref -> readIORef ref >>= \case
+            Just (Left n) -> case inh of
+              Just inh' -> hPutStr inh' (T.unpack $ nodeToString n) >> hFlush inh' >> hClose inh'
+              Nothing -> pure ()
+            _ -> pure ()
+        _ -> pure ()
       exitCode <- waitForProcess proch
-      flushOutput outpre outh
       pure (exitCode, proc')
   where
-    flushOutput :: (Maybe T.Text) -> (Maybe Handle) -> IO ()
-    flushOutput _ (Just h) = do
-      r <- T.hGetContents h
-      case t.pipeOut of
-        NodePipe ref -> writeIORef ref $ NodeString r
-        Terminal -> pure ()
-        File _ _ -> pure ()
-    flushOutput _ _ = pure ()
-    flushPrewritten :: Maybe Handle -> Maybe T.Text -> IO ()
-    flushPrewritten _ Nothing = pure ()
-    flushPrewritten (Just h) (Just x) = T.hPutStr h x
-    getPipe :: TaskPipeType -> IO (StdStream, Maybe T.Text)
-    getPipe (NodePipe n) = do
-      n <- readIORef n
-      pure $ (CreatePipe, Just $ nodeToString n)
-    getPipe (Terminal) = pure (Inherit, Nothing)
-    getPipe (File f m) = openFile f m <&> (,Nothing) . UseHandle
+    getPipe :: TaskPipeType -> IO StdStream
+    getPipe (ProcessData ref) = readIORef ref <&> \case
+      Just (Left _) -> CreatePipe
+      Just (Right h) -> UseHandle h
+      Nothing -> CreatePipe
+    getPipe (Terminal) = pure Inherit
+    getPipe (File f m) = openFile f m <&> UseHandle
 
 
 bmap :: Builtin
 bmap = ("map", \args (inh, outh, errh) process -> case inh of
-    NodePipe ref -> do
+    ProcessData ref -> do
       let (name:argv) = args
       n <- readIORef ref
-      let ns = case n of
-            Array ns' -> ns'
-            Table ns' -> fmap snd $ Map.toList ns'
-            _ -> undefined
-      let defaultTask = Task {
-        procName = name
-      , procArgs = argv
-      , pipeIn = Terminal
-      , pipeOut = Terminal
-      , pipeErr = Terminal
-      , prevTask = Nothing
-      , condition = const True
-      }
-      tasks <- mapM ((\x -> (x <&> \y -> defaultTask {pipeIn = NodePipe y})) . newIORef) ns
-      -- TODO: collect out into whatever `n` is and push into outh
-      mapM_ (executeTask process) tasks
-      {-tasks <- mapM mkTask ns
-      let tasks' = fmap (\x -> x {pipeIn = inh}) tasks
-      mapM_ (executeTask process) tasks'-}
-      pure (ExitSuccess, process)
+      case n of
+        Just (Left n) -> do
+          let ns = case n of
+                Array ns' -> ns'
+                Table ns' -> fmap snd $ Map.toList ns'
+                _ -> undefined
+          let defaultTask = Task {
+            procName = name
+          , procArgs = argv
+          , pipeIn = Terminal
+          , pipeOut = Terminal
+          , pipeErr = Terminal
+          , prevTask = Nothing
+          , condition = const True
+          }
+          tasks <- mapM (\x -> do
+            x' <- newIORef x
+            y' <- newIORef Nothing
+            pure $ defaultTask {pipeIn = ProcessData y'}
+            ) ns
+          -- TODO: collect out into whatever `n` is and push into outh
+          mapM_ (executeTask process) tasks
+          pure (ExitSuccess, process)
+        _ -> error "hi"
     _ -> undefined
     )
 
 regex :: Builtin
 regex = ("regex", \args (inh, outh, errh) process -> case inh of
-    NodePipe ref -> do
+    ProcessData ref -> do
       a <- readIORef ref
-      let n = case a of
-            NodeString x -> x
-            ProcessCall x _ -> nodeToString x
-      print $ "input: " <> n
-      let arg = case args of
-                (x:_) -> x
-                _ -> ""
-      let newt :: [String] = getAllTextMatches (T.unpack n =~ T.unpack arg)
-      case outh of
-        NodePipe oref -> writeIORef oref $ Array $ fmap (NodeString . T.pack) newt
-        Terminal -> putStrLn $ unwords newt
-        _ -> pure ()
-      pure (ExitSuccess, process)
+      case a of
+        Just (Left n') -> do
+          let n = case n' of
+                NodeString x -> x
+                ProcessCall x _ -> nodeToString x
+                _ -> error "hi3"
+          print $ "input: " <> n
+          let arg = case args of
+                  (x:_) -> x
+                  _ -> ""
+          let newt :: [String] = getAllTextMatches (T.unpack n =~ T.unpack arg)
+          case outh of
+            ProcessData ref' -> writeIORef ref' . Just . Left . Array $ fmap (NodeString . T.pack) newt
+            Terminal -> putStrLn $ unwords newt
+            _ -> pure ()
+          pure (ExitSuccess, process)
+        _ -> error "hi2"
     _ -> do
       errHandle <- case errh of
         Terminal -> pure stderr

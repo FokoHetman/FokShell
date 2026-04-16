@@ -15,25 +15,15 @@ import Lib.Format
 import System.IO
 
 import Data.Functor
-import Debug.Trace (traceShow)
 import Data.Bool (bool)
 import Control.Monad (when)
 import Lib.ColorScheme
 
-import Data.Maybe (isJust, fromMaybe, fromJust)
-import Data.Functor
-import System.Directory (findExecutable, getDirectoryContents, getPermissions, Permissions (readable), doesDirectoryExist)
-import Control.Monad (when, unless)
-
-import System.FilePath.Posix ((</>), takeDirectory)
-import Data.Char (isSpace)
-import Data.Bool (bool)
 import Control.Arrow (Arrow(first))
-import Data.List (singleton)
+import System.Directory (getDirectoryContents, getPermissions, Permissions (readable), doesDirectoryExist)
+import System.FilePath.Posix ((</>), takeDirectory)
 
-import Language.Parser
-import System.Environment (lookupEnv, getEnvironment)
-import Data.Bifunctor (Bifunctor(bimap, second))
+
 
 
 data TabContextMode = Disabled | Selection deriving Eq
@@ -49,31 +39,36 @@ instance Def TabCompletion where
     { mode = Disabled
     , selected = Nothing
     , completions = []
+    , autocomplete = def
     }
 
 cleanPrevious :: T.Text -> IO ()
-cleanPrevious inp = moveCursor DRight (T.length inp) >> putStr "\ESC[0J" >> hFlush stdout >> moveCursor DLeft (T.length inp)
+cleanPrevious inp = T.putStr (moveCursorRaw DRight (T.length inp) <> "\ESC[0J" <> moveCursorRaw DLeft (T.length inp)) >> hFlush stdout
 
 displayCompletions :: T.Text -> [T.Text] -> Maybe Int -> IO ()
-displayCompletions current completions selected = do
-  -- setup
-  moveCursor DLeft $ curLen + leftLen
-  moveCursor Down 1
-  -- display
-  display completions selected
-  -- restore
-  moveCursor DLeft $ maxLen + rightLen - curLen
-  moveCursor Up $ length completions + 1
+displayCompletions _ [] _ = pure ()
+displayCompletions current (x:xs) selected = do
+  T.putStr $
+    -- setup
+    moveCursorRaw DLeft (curLen + leftLen) <> moveCursorRaw Down 1
+    -- display
+    <> display completions selected
+    -- restore
+    <> moveCursorRaw DLeft (maxLen + rightLen - curLen)
+    <> moveCursorRaw Up (length completions + 1)
+  hFlush stdout
   where
+    completions = x:xs
     curLen = T.length current
     left = "| "
     right = " |"
     leftLen = T.length left
     rightLen = T.length right
     maxLen = maximum $ fmap T.length completions
-    display :: [T.Text] -> Maybe Int -> IO ()
-    display [] _ = putStr ['-' | _<-[1..maxLen+leftLen+rightLen]]
-    display (x:xs) i = T.putStr (left <> bool "" "\x1b[38;2;255;0;0m" (i==Just 0) <> x <> bool "" "\x1b[0m" (i==Just 0) <> T.pack [' ' | _<- [1..maxLen-T.length x]] <> right) >> moveCursor DLeft (maxLen+leftLen+rightLen) >> moveCursor Down 1 >> display xs ((\x -> x-1) <$> i)
+    display :: [T.Text] -> Maybe Int -> T.Text
+    display [] _ = T.pack ['-' | _<-[1..maxLen+leftLen+rightLen]]
+    display (x:xs) i = left <> bool "" "\x1b[38;2;255;0;0m" (i==Just 0) <> x <> bool "" "\x1b[0m" (i==Just 0) <> T.pack [' ' | _<- [1..maxLen-T.length x]] <> right
+                        <> moveCursorRaw DLeft (maxLen+leftLen+rightLen) <> moveCursorRaw Down 1 <> display xs ((\x -> x-1) <$> i)
 
 
 instance Module' TabCompletion ShellProcess where
@@ -128,7 +123,7 @@ instance Module' TabCompletion ShellProcess where
         right = T.reverse $ T.take i $ T.reverse t
         
         ninput =  left <> with <> right
-  postHook' tc p = model (tc.autocomplete) (moddata p) >>= \x -> (cleanPrevious conf.input >> when (tc.mode == Selection) (displayCompletions (curWord conf) (fst x) tc.selected) $> (tc {completions = fst x}, p))
+  postHook' tc p = model (tc.autocomplete) (moddata p) >>= \x -> (when (tc.mode == Selection) (cleanPrevious conf.input >> displayCompletions (curWord conf) (fst x) tc.selected) $> (tc {completions = fst x}, p))
     where
       conf = p.shellConfig
       curWord c = case runParser parseSeq c.input of

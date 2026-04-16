@@ -3,6 +3,7 @@ module FokShell.Module where
 import Lib.Keys (KeyEvent)
 import Control.Arrow (Arrow(first, second))
 import Data.List (singleton)
+import Data.Bool (bool)
 
 class Module' a proc where
   initHook'    :: a -> proc -> IO (a, proc)
@@ -33,5 +34,10 @@ chainEventHook [] p _ _ = pure (True, ([], p))
 chainEventHook [x] p hook event = second (first singleton) <$> hook x p event
 chainEventHook (x:xs) p hook event = do
   (b, (x', p')) <- hook x p event
-  (b',(xs',p'')) <- chainEventHook xs p' hook event
-  pure (b && b', (x':xs', p''))
+  bool
+    (pure (b, (x':xs, p')))
+    (do
+      (b',(xs',p'')) <- chainEventHook xs p' hook event
+      (pure (b && b', (x':xs', p'')))
+    )
+    b

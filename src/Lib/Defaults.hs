@@ -10,9 +10,13 @@ import System.Posix (isRegularFile, getFileStatus)
 import Data.Functor
 import Lib.Keys
 import Lib.Format (getFormattedDirectory)
+import FokShell.Module.JobManager
 
 instance Def [Module ShellProcess] where
-  def = [Module TabCompletion {mode = Disabled, selected = Nothing, completions = []}]
+  def =
+    [ Module TabCompletion {mode = Disabled, selected = Nothing, completions = [], autocomplete = def}
+    , Module JobManagerModule {jobs = []}
+    ]
 
 instance Def [CompletionRule] where
   def = [

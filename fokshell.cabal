@@ -63,6 +63,7 @@ library
                     , FokShell.Types
                     , FokShell.Module
                     , FokShell.Module.TabCompletion
+                    , FokShell.Module.JobManager
 --                    , ExposedTypes
                     , Lib.ColorScheme
                     , Lib.Primitive

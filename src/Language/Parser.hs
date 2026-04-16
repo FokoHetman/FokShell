@@ -10,8 +10,9 @@ import Data.Bool (bool)
 import Data.Functor
 import System.Directory
 import System.FilePath
-import Control.Monad (filterM)
+import Control.Monad (filterM, join)
 import Debug.Trace (traceShow)
+import Data.Bifunctor (Bifunctor(bimap))
 
 data StdMode = Stdout | Stderr deriving (Eq, Ord, Show)
 data PipeType = ProcessPipe | Write StdMode | Append StdMode | Read deriving (Eq, Ord, Show)
@@ -51,7 +52,15 @@ nodeToString (ProcessCall x xs) = nodeToString x <> T.concat (fmap nodeToString 
 nodeToString x = traceShow x undefined
 
 nlength :: Node -> Int
-nlength = undefined
+nlength (NodeString s) = T.length s
+nlength (Path p) = length p
+nlength (Table t) = sum $ fmap (uncurry (+) . join bimap nlength) $ Map.toList t
+nlength (Array a) = sum $ fmap nlength a
+nlength (ProcessCall p as) = nlength p + sum (fmap nlength as)
+nlength (And n1 n2) = nlength n1 + nlength n2 + 2 {- && -}
+nlength (Or n1 n2) = nlength n1 + nlength n2 + 2 {- || -}
+nlength (Pipe ps n1 n2) = nlength n1 + nlength n2 + pipelength ps
+nlength (Sequence n1 n2) = nlength n1 + nlength n2 + 1 {- ; -}
 
 pipelength :: PipeType -> Int
 pipelength t
