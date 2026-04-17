@@ -29,7 +29,7 @@ import GHC.IO.Exception (ExitCode (ExitSuccess, ExitFailure), IOException (IOErr
 import Control.Monad
 import System.Exit (exitSuccess)
 import Data.List (sort, group, intersperse)
-import Control.Concurrent (threadDelay, forkIO)
+import Control.Concurrent (threadDelay, forkIO, MVar, newEmptyMVar, newMVar, readMVar, putMVar, isEmptyMVar)
 import Data.Bool (bool)
 import Data.Maybe (fromMaybe, fromJust)
 import Data.Text.IO qualified as T
@@ -48,7 +48,7 @@ exitCodeToInt :: ExitCode -> Int
 exitCodeToInt ExitSuccess     = 0
 exitCodeToInt (ExitFailure c) = c
 
-data TaskPipeType = File FilePath IOMode | Terminal | ProcessData (IORef (Maybe (Either Node Handle)))
+data TaskPipeType = File FilePath IOMode | Terminal | ProcessData (MVar (Either Node Handle))
 
 data Task = Task {
   procName    :: T.Text
@@ -76,7 +76,7 @@ mkTask (Pipe pt n1 n2) = case pt of
   ProcessPipe -> do
     n2' <- mkTask n2
     n1' <- mkTask n1
-    ref2 <- newIORef $ Nothing
+    ref2 <- newEmptyMVar
     pure n2' {pipeIn = ProcessData ref2, prevTask = Just $ n1' {pipeOut = ProcessData ref2}}
   Write Stdout -> mkFilePipe n1 n2 Stdout WriteMode
   Write Stderr -> mkFilePipe n1 n2 Stderr WriteMode
@@ -101,7 +101,7 @@ mkTask (ProcessCall (NodeString pname) args) = pure Task {
 , condition = const True
 }
 mkTask (Table t) = do
-  h <- newIORef $ Just $ Left (Table t)
+  h <- newMVar $ Left (Table t)
   pure Task {
     procName = "table"
   , procArgs = []
@@ -275,9 +275,9 @@ cd = ("cd", \args (_inh, outh, errh) process -> do
 
 table :: Builtin
 table = ("table", \args (inh, outh, errh) process -> case inh of
-      ProcessData ref -> readIORef ref >>= \case
-        Just (Left (Table n)) -> case outh of
-          ProcessData oref -> writeIORef oref (Just . Left $ Table n) $> (ExitSuccess, process)
+      ProcessData ref -> readMVar ref >>= \case
+        Left (Table n) -> case outh of
+          ProcessData oref -> putMVar oref (Left $ Table n) $> (ExitSuccess, process)
           Terminal -> displayTable n $> (ExitSuccess, process)
           File fname mode -> (openFile fname mode >>= (`T.hPutStr` (tableToJson n))) $> (ExitSuccess, process)
         _ -> error "hi4"
@@ -324,14 +324,18 @@ executeTask proc' t = do
       inPipe <- getPipe t.pipeIn
       (inh, outh, errh, proch) <- createProcess (proc (T.unpack name) $ fmap T.unpack args) { std_out = outPipe, std_err = errPipe, std_in = inPipe }
       case t.pipeOut of
-        ProcessData ref -> writeIORef ref $ Right <$> outh
+        ProcessData ref -> case outh of
+          Just h -> putMVar ref $ Right h
+          _ -> pure ()
         _ -> pure ()
       case t.pipeErr of
-        ProcessData ref -> writeIORef ref $ Right <$> errh
+        ProcessData ref -> case errh of
+          Just h -> putMVar ref $ Right h
+          Nothing -> pure ()
         _ -> pure ()
       case t.pipeIn of
-        ProcessData ref -> readIORef ref >>= \case
-            Just (Left n) -> case inh of
+        ProcessData ref -> readMVar ref >>= \case
+            Left n -> case inh of
               Just inh' -> hPutStr inh' (T.unpack $ nodeToString n) >> hFlush inh' >> hClose inh'
               Nothing -> pure ()
             _ -> pure ()
@@ -340,10 +344,11 @@ executeTask proc' t = do
       pure (exitCode, proc')
   where
     getPipe :: TaskPipeType -> IO StdStream
-    getPipe (ProcessData ref) = readIORef ref <&> \case
-      Just (Left _) -> CreatePipe
-      Just (Right h) -> UseHandle h
-      Nothing -> CreatePipe
+    getPipe (ProcessData ref) = isEmptyMVar ref >>= bool (readMVar ref <&> \case
+      Left _ -> CreatePipe
+      Right h -> UseHandle h
+      )
+      (pure CreatePipe)
     getPipe (Terminal) = pure Inherit
     getPipe (File f m) = openFile f m <&> UseHandle
 
@@ -352,9 +357,9 @@ bmap :: Builtin
 bmap = ("map", \args (inh, outh, errh) process -> case inh of
     ProcessData ref -> do
       let (name:argv) = args
-      n <- readIORef ref
+      n <- readMVar ref
       case n of
-        Just (Left n) -> do
+        Left n -> do
           let ns = case n of
                 Array ns' -> ns'
                 Table ns' -> fmap snd $ Map.toList ns'
@@ -370,7 +375,7 @@ bmap = ("map", \args (inh, outh, errh) process -> case inh of
           }
           tasks <- mapM (\x -> do
             x' <- newIORef x
-            y' <- newIORef Nothing
+            y' <- newEmptyMVar
             pure $ defaultTask {pipeIn = ProcessData y'}
             ) ns
           -- TODO: collect out into whatever `n` is and push into outh
@@ -383,9 +388,9 @@ bmap = ("map", \args (inh, outh, errh) process -> case inh of
 regex :: Builtin
 regex = ("regex", \args (inh, outh, errh) process -> case inh of
     ProcessData ref -> do
-      a <- readIORef ref
+      a <- readMVar ref
       case a of
-        Just (Left n') -> do
+        Left n' -> do
           let n = case n' of
                 NodeString x -> x
                 ProcessCall x _ -> nodeToString x
@@ -396,7 +401,7 @@ regex = ("regex", \args (inh, outh, errh) process -> case inh of
                   _ -> ""
           let newt :: [String] = getAllTextMatches (T.unpack n =~ T.unpack arg)
           case outh of
-            ProcessData ref' -> writeIORef ref' . Just . Left . Array $ fmap (NodeString . T.pack) newt
+            ProcessData ref' -> putMVar ref' . Left . Array $ fmap (NodeString . T.pack) newt
             Terminal -> putStrLn $ unwords newt
             _ -> pure ()
           pure (ExitSuccess, process)
