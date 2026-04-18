@@ -274,13 +274,20 @@ cd = ("cd", \args (_inh, outh, errh) process -> do
   )
 
 table :: Builtin
-table = ("table", \args (inh, outh, errh) process -> case inh of
-      ProcessData ref -> readMVar ref >>= \case
-        Left (Table n) -> case outh of
+table = ("table", \args (inh, outh, errh) process -> let
+      f n = case outh of
           ProcessData oref -> putMVar oref (Left $ Table n) $> (ExitSuccess, process)
           Terminal -> displayTable n $> (ExitSuccess, process)
           File fname mode -> (openFile fname mode >>= (`T.hPutStr` (tableToJson n))) $> (ExitSuccess, process)
-        _ -> error "hi4"
+    in case inh of
+      ProcessData ref -> readMVar ref >>= \case
+        Left (Table n) -> f n 
+        Right h -> do
+          content <- hGetContents h
+          case runParser jsontable $ T.pack content of
+            Just (_,(Table n)) -> f n
+            _ -> error "no parse"
+        _ -> error "invalid argument"
       _ -> undefined
       )
 
@@ -374,14 +381,13 @@ bmap = ("map", \args (inh, outh, errh) process -> case inh of
           , condition = const True
           }
           tasks <- mapM (\x -> do
-            x' <- newIORef x
-            y' <- newEmptyMVar
+            y' <- newMVar $ Left x
             pure $ defaultTask {pipeIn = ProcessData y'}
             ) ns
           -- TODO: collect out into whatever `n` is and push into outh
           mapM_ (executeTask process) tasks
           pure (ExitSuccess, process)
-        _ -> error "hi"
+        Right _ -> error "map expects either an Array or a Table"
     _ -> undefined
     )
 
@@ -394,8 +400,7 @@ regex = ("regex", \args (inh, outh, errh) process -> case inh of
           let n = case n' of
                 NodeString x -> x
                 ProcessCall x _ -> nodeToString x
-                _ -> error "hi3"
-          print $ "input: " <> n
+                _ -> error "invalid node provided"
           let arg = case args of
                   (x:_) -> x
                   _ -> ""
@@ -405,7 +410,17 @@ regex = ("regex", \args (inh, outh, errh) process -> case inh of
             Terminal -> putStrLn $ unwords newt
             _ -> pure ()
           pure (ExitSuccess, process)
-        _ -> error "hi2"
+        Right h -> do
+          content <- hGetContents h
+          let arg = case args of
+                  (x:_) -> x
+                  _ -> ""
+          let newt :: [String] = getAllTextMatches (content =~ T.unpack arg)
+          case outh of
+            ProcessData ref' -> putMVar ref' . Left . Array $ fmap (NodeString . T.pack) newt
+            Terminal -> putStrLn $ unwords newt
+            _ -> pure ()
+          pure (ExitSuccess, process)
     _ -> do
       errHandle <- case errh of
         Terminal -> pure stderr

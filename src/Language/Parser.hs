@@ -54,7 +54,7 @@ nodeToString x = traceShow x undefined
 nlength :: Node -> Int
 nlength (NodeString s) = T.length s
 nlength (Path p) = length p
-nlength (Table t) = sum $ fmap (uncurry (+) . join bimap nlength) $ Map.toList t
+nlength (Table t) = {- {} -} 2 + sum (fmap (uncurry (+) . join bimap nlength) $ Map.toList t)
 nlength (Array a) = sum $ fmap nlength a
 nlength (ProcessCall p as) = nlength p + sum (fmap nlength as)
 nlength (And n1 n2) = nlength n1 + nlength n2 + 2 {- && -}

@@ -11,6 +11,7 @@ import Lib.Config
 import Lib.Primitive
 import Data.Maybe (fromMaybe)
 import Data.Dynamic (fromDynamic)
+import Data.Map qualified as Map
 import Lib.Format
 import System.IO
 
@@ -147,6 +148,7 @@ countMultiple w t
             | T.elem (T.head t) w = 1 + countMultiple w (T.tail t)
             | otherwise = countMultiple w $ T.tail t
 extractData :: Node -> Int -> (Node, T.Text, Int, [T.Text])
+extractData (NodeString n) c = (NodeString n, n, c, [])
 extractData (ProcessCall e args) c = (ProcessCall e args, l!!currentI, index, take currentI l)
   where
     l = fmap nodeToString $ e:args
@@ -156,8 +158,15 @@ extractData (ProcessCall e args) c = (ProcessCall e args, l!!currentI, index, ta
 extractData (Sequence left right) c = bool (extractData left c) (extractData right (c - nlength left - 1)) (c > nlength left)
 extractData (And left right) c = bool (extractData left c) (extractData right (c - nlength left - 2)) (c > nlength left)
 extractData (Pipe ps left right) c = bool (extractData left c) (extractData right (c - nlength left - pipelength ps)) (c > nlength left)
-
-
+extractData (Table t) c = f (c-1) $ Map.toList t
+  where
+    f _ [] = undefined
+    f i [(n1,n2)] = bool (extractData n1 i) (extractData n2 $ i - nlength n1 - 1) $ i<nlength n1
+    f i ((n1,n2):xs) = bool
+      (extractData n1 i)
+      (let i2 = i - nlength n1 - 1 in 
+          bool (extractData n2 i2) (f (i2 - nlength n2 - 1) xs) $ i2 > nlength n2)
+      (i > nlength n1)
 extractData' :: Node -> T.Text -> Int -> (Node, T.Text, Int, [T.Text])
 extractData' n t c = extractData n c'
   where
@@ -168,16 +177,19 @@ extractData' n t c = extractData n c'
 languageModel :: AutocompleteModel
 languageModel mdata = case runParser parseSeq input of
   Just (_,n) -> do
-    let ((ProcessCall e args), curArg, curInd, prevArgs) = extractData n cursor'
-    let rule = lookupRule (nodeToString e) mdata.mCompletionRules
-    argMatches <- case rule of
+    let (node, curArg, curInd, prevArgs) = extractData n cursor'
+    case node of
+      (ProcessCall e args) -> do
+        let rule = lookupRule (nodeToString e) mdata.mCompletionRules
+        argMatches <- case rule of
           Just r -> case prevArgs of
             [] -> case filter (T.isPrefixOf curArg) execs of
               [] -> pure []
               x  -> pure x
             (_exec:xs) -> fmap (\(CompRule e _) -> e) <$> nestNTimes r (xs ++ [curArg]) (length xs)
           Nothing -> fileMatches curArg
-    pure (argMatches, [])
+        pure (argMatches, [])
+      _ -> pure ([],[])
   Nothing -> pure ([],[])
   where
     input = mdata.modelInput
@@ -190,7 +202,7 @@ languageModel mdata = case runParser parseSeq input of
 
     fileMatches exec = let 
         d = takeDirectory (T.unpack exec)
-      in ((&&) <$> doesDirectoryExist d <*> (getPermissions d <&> readable)) >>= 
+      in (doesDirectoryExist d >>= bool (pure False) (getPermissions d <&> readable)) >>= 
         bool (pure []) (getDirectoryContents d <&> filter (T.isPrefixOf exec) . (bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` exec) <$>) . fmap T.pack)
 
 languageHook :: AutocompleteModelData -> IO ()

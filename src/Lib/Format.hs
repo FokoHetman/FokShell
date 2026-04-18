@@ -11,7 +11,6 @@ import Control.Monad (filterM)
 import System.Directory (getPermissions, Permissions (executable), doesDirectoryExist, canonicalizePath, getDirectoryContents, getHomeDirectory, getCurrentDirectory, doesFileExist)
 import System.FilePath.Posix ((</>))
 
-
 moveCursorRaw :: Direction -> Int -> T.Text
 moveCursorRaw _ 0 = ""
 moveCursorRaw DLeft i = "\ESC[" <> T.pack (show i) <> "D"
@@ -21,7 +20,7 @@ moveCursorRaw Down i = "\ESC[" <> T.pack (show i) <> "B"
 
 
 moveCursor :: Direction -> Int -> IO ()
-moveCursor d = T.putStr . moveCursorRaw d
+moveCursor d = (>>hFlush stdout) . T.putStr . moveCursorRaw d
 
 data Direction = Up | Down | DRight | DLeft
     deriving (Show,Eq)
