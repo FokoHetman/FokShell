@@ -33,7 +33,7 @@ import Control.Concurrent (threadDelay, forkIO, MVar, newEmptyMVar, newMVar, rea
 import Data.Bool (bool)
 import Data.Maybe (fromMaybe, fromJust)
 import Data.Text.IO qualified as T
-import System.IO (openFile, IOMode (WriteMode, AppendMode), stdin, stderr)
+import System.IO (openFile, IOMode (WriteMode, AppendMode), stdin, stderr, stdout)
 
 import Data.Map qualified as Map
 
@@ -481,8 +481,7 @@ exitAction (ShellProcess {}) = exitSuccess
 
 -- BUG: it doesn't display the current input, making clear with prompt yield weird results
 clearAction :: Action
-clearAction proc = let config = shellConfig proc; d = (T.length (input config) - cursorLoc config) in putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt config $ colorScheme config) >> 
-                   when (d>0) (moveCursor DRight d) {->> autocompleteRedraw proc-} $> proc
+clearAction proc = let config = shellConfig proc; d = (T.length (input config) - cursorLoc config) in putStrLn "\ESC[2J\ESC[H" *> displayPrompt (prompt config $ colorScheme config) >> T.putStr config.input >> hFlush stdout $> proc
 
 displayPrompt :: Prompt -> IO ()
 displayPrompt = \case 
@@ -507,7 +506,14 @@ nix = CompRule "nix" (\t -> pure $ filter (\(CompRule i _) -> t `T.isPrefixOf` i
 -}
 
 cdCompletion :: CompletionRule
-cdCompletion = CompRule "cd" $ fileCompletion ((<&> isDirectory) . getFileStatus) $ const (pure [])
+cdCompletion = CompRule "cd" $ fileCompletion (safeCheck $ (<&> isDirectory) . getFileStatus) $ const (pure [])
+
+safeCheck :: (FilePath -> IO Bool) -> FilePath -> IO Bool
+safeCheck f p = do
+  b1 <- doesFileExist p
+  b2 <- doesDirectoryExist p
+
+  bool (pure True) (f p) (b1 || b2)
 
 
 data ShellConfig = ShellConfig

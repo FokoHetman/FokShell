@@ -23,16 +23,19 @@ import Lib.ColorScheme
 import Control.Arrow (Arrow(first))
 import System.Directory (getDirectoryContents, getPermissions, Permissions (readable), doesDirectoryExist)
 import System.FilePath.Posix ((</>), takeDirectory)
+import Debug.Trace (traceShow)
 
 
 
 
-data TabContextMode = Disabled | Selection deriving Eq
+data TabContextMode = Disabled | Selection deriving (Eq, Show)
 data TabCompletion = TabCompletion
   { mode        :: TabContextMode
   , selected    :: Maybe Int
   , completions :: [T.Text]
-  , autocomplete :: AutocompleteConfig
+  , autocomplete    :: AutocompleteConfig
+  , maxSuggestions  :: Int
+  , shadowText      :: Bool
   }
 
 instance Def TabCompletion where
@@ -41,6 +44,8 @@ instance Def TabCompletion where
     , selected = Nothing
     , completions = []
     , autocomplete = def
+    , maxSuggestions = 10
+    , shadowText = True
     }
 
 cleanPrevious :: T.Text -> IO ()
@@ -179,16 +184,16 @@ languageModel mdata = case runParser parseSeq input of
   Just (_,n) -> do
     let (node, curArg, curInd, prevArgs) = extractData n cursor'
     case node of
-      (ProcessCall e args) -> do
-        let rule = lookupRule (nodeToString e) mdata.mCompletionRules
-        argMatches <- case rule of
-          Just r -> case prevArgs of
-            [] -> case filter (T.isPrefixOf curArg) execs of
-              [] -> pure []
-              x  -> pure x
-            (_exec:xs) -> fmap (\(CompRule e _) -> e) <$> nestNTimes r (xs ++ [curArg]) (length xs)
-          Nothing -> fileMatches curArg
-        pure (argMatches, [])
+      (ProcessCall e args) -> case prevArgs of
+        [] -> case filter (T.isPrefixOf curArg) execs of
+          [] -> pure ([],[])
+          x  -> pure (x,[])
+        (_exec:xs) -> do
+          let rule = lookupRule (nodeToString e) mdata.mCompletionRules
+          argMatches <- case rule of
+            Just r -> fmap (\(CompRule e _) -> e) <$> nestNTimes r (xs ++ [curArg]) (length xs)
+            Nothing -> fileMatches curArg
+          pure (argMatches, [])
       _ -> pure ([],[])
   Nothing -> pure ([],[])
   where
@@ -198,7 +203,7 @@ languageModel mdata = case runParser parseSeq input of
     wsCount = countMultiple " '\"" leftInput
     -- | cursor independent of whitespace, perfect for use with my Parser
     cursor' = loc - wsCount
-    execs = mdata.executableList ++ mdata.builtinNames
+    execs = dedup $ mdata.executableList ++ mdata.builtinNames
 
     fileMatches exec = let 
         d = takeDirectory (T.unpack exec)

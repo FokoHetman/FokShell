@@ -64,6 +64,8 @@ library
                     , FokShell.Module
                     , FokShell.Module.TabCompletion
                     , FokShell.Module.JobManager
+                    , FokShell.Module.Preprocessor
+                    , FokShell.Module.Preprocessor.StringPreprocessors
 --                    , ExposedTypes
                     , Lib.ColorScheme
                     , Lib.Primitive
