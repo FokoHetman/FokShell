@@ -9,6 +9,7 @@ class Module' a proc where
   initHook'    :: a -> proc -> IO (a, proc)
   preHook'     :: a -> proc -> KeyEvent -> IO (Bool, (a, proc))
   postHook'    :: a -> proc -> IO (a, proc)
+  exitHook'    :: a -> proc -> IO (a, proc)
 
 data Module p where
   Module :: Module' a p => a -> Module p
@@ -20,6 +21,9 @@ preHook :: Module p -> p -> KeyEvent -> IO (Bool, (Module p, p))
 preHook (Module a) p e = second (first Module) <$> preHook' a p e
 postHook :: Module p -> p -> IO (Module p, p)
 postHook (Module a) p = first Module <$> postHook' a p
+
+exitHook :: Module p -> p -> IO (Module p, p)
+exitHook (Module a) p = first Module <$> exitHook' a p
 
 chainHook :: [Module p] -> p -> (Module p -> p -> IO (Module p, p)) -> IO ([Module p], p)
 chainHook [] p _ = pure ([], p)

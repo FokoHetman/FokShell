@@ -40,7 +40,7 @@ import Data.Map qualified as Map
 import Text.Regex.TDFA
 import Text.Regex.TDFA.Text ()
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import FokShell.Module (Module (Module))
+import FokShell.Module qualified as Module
 import Control.Exception (catch, throwIO, Exception)
 import System.IO.Error (isEOFError, isDoesNotExistError, ioeGetErrorType, ioeGetErrorString, ioeGetLocation, ioeGetFileName)
 
@@ -487,7 +487,7 @@ haltAction :: Action
 haltAction proc = let config = shellConfig proc in displayPrompt (prompt config  $ colorScheme config) $> proc {shellConfig = config {input = "",cursorLoc=0}}
 
 exitAction :: Action
-exitAction (ShellProcess {}) = exitSuccess
+exitAction p = Module.chainHook p.shellConfig.modules p Module.exitHook >> exitSuccess
 
 -- BUG: it doesn't display the current input, making clear with prompt yield weird results
 clearAction :: Action
@@ -552,7 +552,7 @@ data ShellConfig = ShellConfig
 
   , completionRules :: [CompletionRule]
 
-  , modules :: [Module ShellProcess]
+  , modules :: [Module.Module ShellProcess]
   }
 
 executablelist :: ShellProcess -> [T.Text]

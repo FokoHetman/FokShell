@@ -15,10 +15,12 @@ import FokShell.Module.JobManager
 import System.Directory (getHomeDirectory)
 import FokShell.Module.Preprocessor.StringPreprocessors (combineStringPreprocessors, substituter, envVarPreprocessor)
 import Data.List (sort)
+import FokShell.Module.History (withHomeDir, historyFile)
 
 instance Def [Module ShellProcess] where
   def =
     [ Module TabCompletion {mode = Disabled, selected = Nothing, completions = [], autocomplete = def, maxSuggestions = 10, shadowText = True, sortAlgorithm = const sort}
+    , Module $ historyFile (withHomeDir ".config/fokshell/history") 10000
     , Module JobManagerModule {jobs = [], preprocessors = [combineStringPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]}
     ]
 
@@ -51,9 +53,9 @@ instance Def ShellHooks where
 
 instance Def [(KeyEvent, Action)] where
   def = [
-        ((control, Character "c"), \proc -> haltHook (hooks (shellConfig proc)) proc >>= \x -> if x then haltAction proc else pure proc)
-      , ((control, Character "d"), \proc -> exitHook (hooks (shellConfig proc)) proc >>= \x -> if x then exitAction proc else pure proc)
-      , ((control, Character "l"), \proc -> clearHook(hooks (shellConfig proc)) (proc {shellConfig = (shellConfig proc) {trigger=(control, Character "l")}}) >>= \x -> if x then clearAction proc else pure proc)
+        ((control, Character "c"), \proc -> proc.shellConfig.hooks.haltHook proc >>= \x -> if x then haltAction proc else pure proc)
+      , ((control, Character "d"), \proc -> proc.shellConfig.hooks.exitHook proc >>= \x -> if x then exitAction proc else pure proc)
+      , ((control, Character "l"), \proc -> proc.shellConfig.hooks.clearHook (proc {shellConfig = (shellConfig proc) {trigger=(control, Character "l")}}) >>= \x -> if x then clearAction proc else pure proc)
     ]
 
 instance Def ShellConfig where

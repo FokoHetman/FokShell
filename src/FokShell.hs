@@ -44,10 +44,8 @@ fokshell :: ShellConfig -> IO ()
 fokshell config = do
   hSetEcho stdin False
   hSetBuffering stdin NoBuffering
-  extractedHistory <- getHistory config
   
-  
-  proc <- updatePath $ ShellProcess {shellConfig = config {history = extractedHistory}, shellState = InputOutput, shellCache = Cache []}
+  proc <- updatePath $ ShellProcess {shellConfig = config, shellState = InputOutput, shellCache = Cache []}
   doStart <- startHook (hooks config) proc
   unless doStart exitSuccess
 
@@ -88,7 +86,7 @@ parseEvent proc' key = do
       (KeyModifiers 0, Arrow d) -> case d of
           DLeft   -> moveCursor' conf DLeft  1 $> proc {shellConfig = conf {cursorLoc = min (cursorLoc conf + 1) (T.length $ input conf)}}
           DRight  -> moveCursor' conf DRight 1 $> proc {shellConfig = conf {cursorLoc = max (cursorLoc conf - 1) 0}}
-          Up      -> when (T.length (input conf) - cursorLoc conf > 0 ) (moveCursor' conf DLeft (T.length (input conf) - cursorLoc conf)) >> 
+          {-Up      -> when (T.length (input conf) - cursorLoc conf > 0 ) (moveCursor' conf DLeft (T.length (input conf) - cursorLoc conf)) >> 
             (\x ->  redrawFromCursor x {cursorLoc = T.length $ input x} >>  moveCursor' x {cursorLoc = T.length $ input x} DRight (T.length $ input x) $> proc {shellConfig = x {cursorLoc = 0}})
               (case historyIndex conf of
               Nothing -> case history conf of 
@@ -102,7 +100,7 @@ parseEvent proc' key = do
                 Nothing -> conf
                 Just (0, r) -> conf {historyIndex = Nothing, input = r}
                 Just (i, r) -> let j = max 0 (i-1) in conf {historyIndex = Just (j, r), input = history conf!!j}
-              )
+              )-}
 
       {-(KeyModifiers 0, Tab) -> bool (pure proc) (model (conf.autocomplete) (moddata conf) >>= (\case
             [] -> pure proc

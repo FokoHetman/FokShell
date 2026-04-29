@@ -138,7 +138,7 @@ instance Module' TabCompletion ShellProcess where
       curWord c = case runParser parseSeq c.input of
         Just (_,n) -> (\(_,c',_,_) -> c') $ extractData' n c.input c.cursorLoc
         Nothing    -> ""
-
+  exitHook' tc p = pure (tc, p)
 moddata :: ShellProcess -> AutocompleteModelData
 moddata p = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c,
               historyL = history c, executableList = executablelist' p, builtinNames = fmap fst (builtins c), 

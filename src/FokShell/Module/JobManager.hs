@@ -42,3 +42,4 @@ instance Module' JobManagerModule ShellProcess where
     where
     conf = p.shellConfig
   postHook' tc p = pure (tc,p)
+  exitHook' tc p = pure (tc, p)
