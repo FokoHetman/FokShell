@@ -24,7 +24,6 @@ instance Module' JobManagerModule ShellProcess where
           putStrLn ""
           let conf = shellConfig p
           let input' = T.strip $ input conf
-          --let task = mkTask' $ T.strip $ input conf
           let preprocess = connectPreprocessors tc.preprocessors
           let task = runParser parseSeq input' <&> (>>= mkTask) . preprocess . snd
           (job, p') <- case task of
@@ -33,7 +32,6 @@ instance Module' JobManagerModule ShellProcess where
               p <- spawnJob (p {shellConfig = conf { input="", cursorLoc=0 }}) job
               pure (Just job, p)
             Nothing -> pure (Nothing, p {shellConfig = conf {input="",cursorLoc=0}})
-          --(job, p') <- handleJob p {shellConfig = conf {history = T.strip (input conf):history conf, historyIndex = Nothing}}
           displayPrompt (prompt p'.shellConfig $ colorScheme p'.shellConfig)
           case job of 
             Just x -> pure (False, (tc {jobs = x:jobs tc}, p'))

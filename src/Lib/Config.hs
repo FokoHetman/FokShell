@@ -90,7 +90,7 @@ mkTask (Pipe pt n1 n2) = case pt of
     mkFilePipe n1 n2 Stderr mode = do
       n1' <- mkTask n1
       pure n1' {pipeErr = File (T.unpack $ nodeToString n2) mode}
-mkTask (ProcessCall (NodeString pname) args) = pure Task {
+mkTask (ProcessCall (NodeString pname _) args) = pure Task {
   procName = pname
 , procArgs = fmap nodeToString args
 , pipeIn = Terminal
@@ -160,6 +160,7 @@ data Process = Process {
 
 data Job = Job {
   task :: Task
+, exitCode :: MVar ExitCode
 }
 {-
 data Job = Job {
@@ -398,7 +399,7 @@ regex = ("regex", \args (inh, outh, errh) process -> case inh of
       case a of
         Left n' -> do
           let n = case n' of
-                NodeString x -> x
+                NodeString x _ -> x
                 ProcessCall x _ -> nodeToString x
                 _ -> error "invalid node provided"
           let arg = case args of
@@ -406,7 +407,7 @@ regex = ("regex", \args (inh, outh, errh) process -> case inh of
                   _ -> ""
           let newt :: [String] = getAllTextMatches (T.unpack n =~ T.unpack arg)
           case outh of
-            ProcessData ref' -> putMVar ref' . Left . Array $ fmap (NodeString . T.pack) newt
+            ProcessData ref' -> putMVar ref' . Left . Array $ fmap ((`NodeString` True) . T.pack) newt
             Terminal -> putStrLn $ unwords newt
             _ -> pure ()
           pure (ExitSuccess, process)
@@ -417,7 +418,7 @@ regex = ("regex", \args (inh, outh, errh) process -> case inh of
                   _ -> ""
           let newt :: [String] = getAllTextMatches (content =~ T.unpack arg)
           case outh of
-            ProcessData ref' -> putMVar ref' . Left . Array $ fmap (NodeString . T.pack) newt
+            ProcessData ref' -> putMVar ref' . Left . Array $ fmap ((`NodeString` True) . T.pack) newt
             Terminal -> putStrLn $ unwords newt
             _ -> pure ()
           pure (ExitSuccess, process)

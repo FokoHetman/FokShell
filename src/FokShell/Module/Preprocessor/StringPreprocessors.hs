@@ -13,7 +13,8 @@ import System.Environment.Blank (getEnv)
 import Data.Functor ((<&>))
 import Control.Applicative
 combineStringPreprocessors :: [Preprocessor] -> Preprocessor
-combineStringPreprocessors pp n@(NodeString _) = connectPreprocessors pp n
+combineStringPreprocessors pp n@(NodeString _ True) = connectPreprocessors pp n
+combineStringPreprocessors _  n@(NodeString _ False) = pure n
 combineStringPreprocessors pp n@(Path _) = connectPreprocessors pp n
 combineStringPreprocessors pp (Table t) = Table . M.fromList <$> mapM (\(x,y) -> do
       y' <- combineStringPreprocessors pp y
@@ -27,9 +28,9 @@ combineStringPreprocessors pp (Or left right) = Or <$> combineStringPreprocessor
 combineStringPreprocessors pp (Pipe ps left right) = Pipe ps <$> combineStringPreprocessors pp left <*> combineStringPreprocessors pp right
 
 substituter :: T.Text -> IO T.Text -> Int -> Preprocessor
-substituter pat with times (NodeString s) = do
+substituter pat with times (NodeString s True) = do
   with' <- with
-  pure $ NodeString $ replaceN times pat with' s
+  pure $ (`NodeString` True) $ replaceN times pat with' s
 substituter _ _ _ _ = undefined
 
 replaceN :: Int -> T.Text -> T.Text -> T.Text -> T.Text
@@ -43,9 +44,9 @@ replaceN x pat with input = bool (error "negative number of replaces in replaceN
 
 
 envVarPreprocessor :: Preprocessor
-envVarPreprocessor (NodeString s) = case runParser (many substringParser) s of
-    Just (leftover, xs) -> NodeString . (<>leftover) . T.concat <$> sequence xs
-    Nothing -> pure $ NodeString s
+envVarPreprocessor (NodeString s True) = case runParser (many substringParser) s of
+    Just (leftover, xs) -> (`NodeString` True) . (<>leftover) . T.concat <$> sequence xs
+    Nothing -> pure $ NodeString s True
 envVarPreprocessor _ = undefined
 substringParser :: Parser (IO T.Text)
 substringParser  = envvarParser <|> (pure <$> basicParser)

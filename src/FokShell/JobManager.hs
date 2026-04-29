@@ -18,11 +18,8 @@ handleJob proc = do
       pure (Just job, p)
     Nothing -> pure (Nothing, proc {shellConfig = conf {input="",cursorLoc=0}})
 
-spawnJob :: ShellProcess -> Job -> IO ShellProcess
-spawnJob proc job = do
-  -- TODO: append `job` to process' jobs, handle job stuff
-  finExitCode <- spawnTask proc job.task
-  pure proc
+spawnJob :: ShellProcess -> Job -> IO (ExitCode, ShellProcess)
+spawnJob proc job = spawnTask proc job.task
 
 spawnTask :: ShellProcess -> Task -> IO (ExitCode, ShellProcess)
 spawnTask proc t = case t.prevTask of

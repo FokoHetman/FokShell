@@ -124,11 +124,6 @@ parseEvent proc' key = do
             _       -> 0
           n _ = error "this should NEVER happen."
     
-      {-(KeyModifiers 0, Enter) -> swallowPrompt (cursorLoc conf) (input conf) (prompt conf $ colorScheme conf) >> 
-          putStrLn "" >> 
-            handleJob proc {shellConfig = conf {history = T.strip (input conf):history conf, historyIndex = Nothing}}
-          <* displayPrompt (prompt conf $ colorScheme conf)-}
-    
       (KeyModifiers 0, Backspace) -> moveCursor' conf DLeft 1 >> redrawFromCursor nconf $> proc {shellConfig = nconf}
         where
           loc = cursorLoc conf 

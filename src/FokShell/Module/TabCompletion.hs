@@ -153,7 +153,7 @@ countMultiple w t
             | T.elem (T.head t) w = 1 + countMultiple w (T.tail t)
             | otherwise = countMultiple w $ T.tail t
 extractData :: Node -> Int -> (Node, T.Text, Int, [T.Text])
-extractData (NodeString n) c = (NodeString n, n, c, [])
+extractData (NodeString n b) c = (NodeString n b, n, c, [])
 extractData (ProcessCall e args) c = (ProcessCall e args, l!!currentI, index, take currentI l)
   where
     l = fmap nodeToString $ e:args

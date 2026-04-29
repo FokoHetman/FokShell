@@ -19,7 +19,7 @@ data PipeType = ProcessPipe | Write StdMode | Append StdMode | Read deriving (Eq
 
 data Node = {-operations-}  ProcessCall Node [Node] | And Node Node | Pipe PipeType Node Node | Sequence Node Node | Or Node Node |
             {-abstract-}    Table (Map.Map Node Node) | Array [Node] |
-            {-primitives-}  Path FilePath | NodeString T.Text
+            {-primitives-}  Path FilePath | NodeString T.Text {- | whether to preprocess this nodestring -} Bool
     deriving (Eq, Ord, Show)
 newtype Parser a = Parser {runParser :: T.Text -> Maybe (T.Text, a)}
 
@@ -47,12 +47,12 @@ instance Monad Parser where
 
 
 nodeToString :: Node -> T.Text
-nodeToString (NodeString s) = s
+nodeToString (NodeString s _) = s
 nodeToString (ProcessCall x xs) = nodeToString x <> T.concat (fmap nodeToString xs)
 nodeToString x = traceShow x undefined
 
 nlength :: Node -> Int
-nlength (NodeString s) = T.length s
+nlength (NodeString s _) = T.length s
 nlength (Path p) = length p
 nlength (Table t) = {- {} -} 2 + sum (fmap (uncurry (+) . join bimap nlength) $ Map.toList t)
 nlength (Array a) = sum $ fmap nlength a
@@ -131,14 +131,14 @@ specialChars = "=:;{}<|>,!#&\\\"' "
 isSpecial :: Char -> Bool
 isSpecial = (`elem` specialChars)
 
-bare, singleQuoted, doubleQuoted, shellWordP :: Parser T.Text
-bare = spanPForce (not . isSpecial)
-singleQuoted = charP '\'' *> spanP (/='\'') <* charP '\''
-doubleQuoted = charP '"' *> spanP (/='\"') <* charP '"'
+bare, singleQuoted, doubleQuoted, shellWordP :: Parser (T.Text,Bool)
+bare = (,True) <$> spanPForce (not . isSpecial)
+singleQuoted = (,False) <$> (charP '\'' *> spanP (/='\'') <* charP '\'')
+doubleQuoted = (,True) <$> (charP '"' *> spanP (/='\"') <* charP '"')
 shellWordP = singleQuoted <|> doubleQuoted <|> bare
 
 shellWord :: Parser Node
-shellWord = NodeString <$> shellWordP
+shellWord = uncurry NodeString <$> shellWordP
 
 stringP :: String -> Parser String
 stringP = traverse charP
