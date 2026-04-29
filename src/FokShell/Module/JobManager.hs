@@ -10,6 +10,7 @@ import Lib.Keys
 import FokShell.Types
 import Language.Parser
 import FokShell.Module.Preprocessor
+import Control.Concurrent (newEmptyMVar)
 data JobManagerModule = JobManagerModule
   {
     jobs :: [Job]
@@ -28,7 +29,8 @@ instance Module' JobManagerModule ShellProcess where
           let task = runParser parseSeq input' <&> (>>= mkTask) . preprocess . snd
           (job, p') <- case task of
             Just t  -> t >>= \t -> do
-              let job = Job t
+              mvar <- newEmptyMVar
+              let job = Job t mvar
               p <- spawnJob (p {shellConfig = conf { input="", cursorLoc=0 }}) job
               pure (Just job, p)
             Nothing -> pure (Nothing, p {shellConfig = conf {input="",cursorLoc=0}})

@@ -14,10 +14,11 @@ import Lib.Format (getFormattedDirectory)
 import FokShell.Module.JobManager
 import System.Directory (getHomeDirectory)
 import FokShell.Module.Preprocessor.StringPreprocessors (combineStringPreprocessors, substituter, envVarPreprocessor)
+import Data.List (sort)
 
 instance Def [Module ShellProcess] where
   def =
-    [ Module TabCompletion {mode = Disabled, selected = Nothing, completions = [], autocomplete = def, maxSuggestions = 10, shadowText = True}
+    [ Module TabCompletion {mode = Disabled, selected = Nothing, completions = [], autocomplete = def, maxSuggestions = 10, shadowText = True, sortAlgorithm = const sort}
     , Module JobManagerModule {jobs = [], preprocessors = [combineStringPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]}
     ]
 

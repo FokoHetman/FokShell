@@ -25,7 +25,7 @@ import Data.Functor
 
 import GHC.IO.Handle
 import Language.Parser
-import GHC.IO.Exception (ExitCode (ExitSuccess, ExitFailure), IOException (IOError))
+import GHC.IO.Exception (ExitCode (ExitSuccess, ExitFailure), IOException (IOError), IOErrorType (NoSuchThing, PermissionDenied))
 import Control.Monad
 import System.Exit (exitSuccess)
 import Data.List (sort, group, intersperse)
@@ -41,8 +41,8 @@ import Text.Regex.TDFA
 import Text.Regex.TDFA.Text ()
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import FokShell.Module (Module (Module))
-import Control.Exception (catch, throwIO)
-import System.IO.Error (isEOFError)
+import Control.Exception (catch, throwIO, Exception)
+import System.IO.Error (isEOFError, isDoesNotExistError, ioeGetErrorType, ioeGetErrorString, ioeGetLocation, ioeGetFileName)
 
 exitCodeToInt :: ExitCode -> Int
 exitCodeToInt ExitSuccess     = 0
@@ -319,6 +319,14 @@ forward read write = do
       forward read write
     Nothing -> pure ()
 
+handleProcessException :: ShellProcess -> IOError -> IO (ExitCode, ShellProcess)
+handleProcessException proc' e = do
+  traceIO $ fromMaybe "" ((<>": ") <$> ioeGetFileName e) <> ioeGetErrorString e
+  let ecode = case ioeGetErrorType e of
+            NoSuchThing      -> ExitFailure 127
+            PermissionDenied -> ExitFailure 126
+            _                -> ExitFailure 1
+  pure (ecode, proc')
 executeTask :: ShellProcess -> Task -> IO (ExitCode, ShellProcess)
 executeTask proc' t = do
   let name = t.procName
@@ -327,29 +335,30 @@ executeTask proc' t = do
   case lookup name builtins of
     Just x  -> x args (t.pipeIn, t.pipeOut, t.pipeErr) proc'
     Nothing -> do
-      outPipe <- getPipe t.pipeOut
-      errPipe <- getPipe t.pipeErr
-      inPipe <- getPipe t.pipeIn
-      (inh, outh, errh, proch) <- createProcess (proc (T.unpack name) $ fmap T.unpack args) { std_out = outPipe, std_err = errPipe, std_in = inPipe }
-      case t.pipeOut of
-        ProcessData ref -> case outh of
-          Just h -> putMVar ref $ Right h
-          _ -> pure ()
-        _ -> pure ()
-      case t.pipeErr of
-        ProcessData ref -> case errh of
-          Just h -> putMVar ref $ Right h
-          Nothing -> pure ()
-        _ -> pure ()
-      case t.pipeIn of
-        ProcessData ref -> readMVar ref >>= \case
-            Left n -> case inh of
-              Just inh' -> hPutStr inh' (T.unpack $ nodeToString n) >> hFlush inh' >> hClose inh'
-              Nothing -> pure ()
+      (`catch` handleProcessException proc') $ do
+        outPipe <- getPipe t.pipeOut
+        errPipe <- getPipe t.pipeErr
+        inPipe <- getPipe t.pipeIn
+        (inh, outh, errh, proch) <- createProcess (proc (T.unpack name) $ fmap T.unpack args) { std_out = outPipe, std_err = errPipe, std_in = inPipe }
+        case t.pipeOut of
+          ProcessData ref -> case outh of
+            Just h -> putMVar ref $ Right h
             _ -> pure ()
-        _ -> pure ()
-      exitCode <- waitForProcess proch
-      pure (exitCode, proc')
+          _ -> pure ()
+        case t.pipeErr of
+          ProcessData ref -> case errh of
+            Just h -> putMVar ref $ Right h
+            Nothing -> pure ()
+          _ -> pure ()
+        case t.pipeIn of
+          ProcessData ref -> readMVar ref >>= \case
+              Left n -> case inh of
+                Just inh' -> hPutStr inh' (T.unpack $ nodeToString n) >> hFlush inh' >> hClose inh'
+                Nothing -> pure ()
+              _ -> pure ()
+          _ -> pure ()
+        exitCode <- waitForProcess proch
+        pure (exitCode, proc')
   where
     getPipe :: TaskPipeType -> IO StdStream
     getPipe (ProcessData ref) = isEmptyMVar ref >>= bool (readMVar ref <&> \case

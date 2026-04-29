@@ -5,6 +5,7 @@ import Data.Text qualified as T
 
 import GHC.IO.Exception (ExitCode)
 import Data.Bool (bool)
+import Control.Concurrent (putMVar, newEmptyMVar)
 
 handleJob :: ShellProcess -> IO (Maybe Job, ShellProcess)
 handleJob proc = do
@@ -13,13 +14,17 @@ handleJob proc = do
 
   case task of
     Just t  -> t >>= \t -> do
-      let job = Job t
+      mvar <- newEmptyMVar
+      let job = Job t mvar
       p <- spawnJob (proc {shellConfig = conf { input="", cursorLoc=0 }}) job
       pure (Just job, p)
     Nothing -> pure (Nothing, proc {shellConfig = conf {input="",cursorLoc=0}})
 
-spawnJob :: ShellProcess -> Job -> IO (ExitCode, ShellProcess)
-spawnJob proc job = spawnTask proc job.task
+spawnJob :: ShellProcess -> Job -> IO ShellProcess
+spawnJob proc job = do
+  (exitCode, proc') <- spawnTask proc job.task
+  putMVar job.exitCode exitCode
+  pure proc'
 
 spawnTask :: ShellProcess -> Task -> IO (ExitCode, ShellProcess)
 spawnTask proc t = case t.prevTask of

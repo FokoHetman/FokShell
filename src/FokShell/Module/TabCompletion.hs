@@ -24,6 +24,7 @@ import Control.Arrow (Arrow(first))
 import System.Directory (getDirectoryContents, getPermissions, Permissions (readable), doesDirectoryExist)
 import System.FilePath.Posix ((</>), takeDirectory)
 import Debug.Trace (traceShow)
+import Data.List (sort)
 
 
 
@@ -33,6 +34,7 @@ data TabCompletion = TabCompletion
   { mode        :: TabContextMode
   , selected    :: Maybe Int
   , completions :: [T.Text]
+  , sortAlgorithm   :: ShellProcess -> [T.Text] -> [T.Text]
   , autocomplete    :: AutocompleteConfig
   , maxSuggestions  :: Int
   , shadowText      :: Bool
@@ -43,6 +45,7 @@ instance Def TabCompletion where
     { mode = Disabled
     , selected = Nothing
     , completions = []
+    , sortAlgorithm = const sort
     , autocomplete = def
     , maxSuggestions = 10
     , shadowText = True
@@ -85,7 +88,7 @@ instance Module' TabCompletion ShellProcess where
         [] -> pure (True, (tc,p))
         [x] -> (False,) . (tc,) <$> replaceCurrentIO x p
         x -> do
-          displayCompletions (curWord p.shellConfig) x tc.selected
+          displayCompletions (curWord p.shellConfig) (sort x) tc.selected
           pure (False, (tc {mode = Selection, completions = x, selected = Just 0 {- len is at least 2 -}}, p))
       _ -> pure (True, (tc,p))
     Selection -> cleanPrevious p.shellConfig.input >> case e of
@@ -99,12 +102,12 @@ instance Module' TabCompletion ShellProcess where
           let sel = case tc.selected of
                   Just a -> Just $ bool (a+1) 0 (a+1==length tc.completions)
                   Nothing -> Just 0
-          displayCompletions (curWord p.shellConfig) x sel
+          displayCompletions (curWord p.shellConfig) (sort x) sel
           pure (False, (tc {mode = Selection, completions = x, selected = sel}, p))
       _ -> model (tc.autocomplete) (moddata p) >>= (\case
         [] -> pure (True, (tc {selected = Nothing},p))
         x -> do
-          displayCompletions (curWord p.shellConfig) x Nothing
+          displayCompletions (curWord p.shellConfig) (sort x) Nothing
           pure (True, (tc {selected = Nothing},p))
         ) . fst
     where
