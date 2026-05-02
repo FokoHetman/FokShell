@@ -4,6 +4,9 @@ import Lib.Keys (KeyEvent)
 import Control.Arrow (Arrow(first, second))
 import Data.List (singleton)
 import Data.Bool (bool)
+import Data.Maybe
+import Data.Proxy
+import Data.Typeable
 
 class Module' a proc where
   initHook'    :: a -> proc -> IO (a, proc)
@@ -12,7 +15,7 @@ class Module' a proc where
   exitHook'    :: a -> proc -> IO (a, proc)
 
 data Module p where
-  Module :: Module' a p => a -> Module p
+  Module :: (Module' a p,Typeable a) => a -> Module p
 
 initHook :: Module p -> p -> IO (Module p, p)
 initHook (Module a) p = first Module <$> initHook' a p
@@ -45,3 +48,9 @@ chainEventHook (x:xs) p hook event = do
       (pure (b && b', (x':xs', p'')))
     )
     b
+
+withProxy :: forall i p. Typeable i => Proxy i -> Module p -> Maybe i
+withProxy _ (Module a) = cast a
+requestModule :: forall a p. (Module' a p,Typeable a) => Proxy a -> [Module p] -> [a]
+requestModule p xs = fmap fromJust $ filter isJust $ fmap (withProxy p) xs
+

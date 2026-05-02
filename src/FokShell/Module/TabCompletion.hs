@@ -1,6 +1,7 @@
 {-# LANGUAGE LambdaCase, OverloadedStrings #-}
 module FokShell.Module.TabCompletion where
 import FokShell.Module
+import FokShell.Module.History
 
 import Lib.Keys
 
@@ -20,6 +21,7 @@ import Data.Bool (bool)
 import Control.Monad (when)
 import Lib.ColorScheme
 
+import Data.Proxy
 import Control.Arrow (Arrow(first))
 import System.Directory (getDirectoryContents, getPermissions, Permissions (readable), doesDirectoryExist)
 import System.FilePath.Posix ((</>), takeDirectory)
@@ -141,7 +143,7 @@ instance Module' TabCompletion ShellProcess where
   exitHook' tc p = pure (tc, p)
 moddata :: ShellProcess -> AutocompleteModelData
 moddata p = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c,
-              historyL = history c, executableList = executablelist' p, builtinNames = fmap fst (builtins c), 
+              historyL = concatMap (\x -> x.history) $ requestModule (Proxy @HistoryModule) $ c.modules, executableList = executablelist' p, builtinNames = fmap fst (builtins c), 
               modelOutput = ([],[]), mCompletionRules = completionRules c} where c = p.shellConfig
 executablelist' :: ShellProcess -> [T.Text]
 executablelist' p = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache p) "executables" >>= \x -> lookupCache x "execs")

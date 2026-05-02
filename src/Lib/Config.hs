@@ -236,7 +236,6 @@ defaultHistoryFile :: IO FilePath
 defaultHistoryFile = getHomeDirectory <&> (</> ".fok_history")
 defaultExitHook :: Hook
 defaultExitHook proc = do
-  defaultHistoryFile >>= \x -> writeFile x $ T.unpack $ T.strip $ T.intercalate "\n" $ T.strip <$> reverse (history (shellConfig proc))
   putStrLn "\nexit"
   pure True
 
@@ -540,9 +539,6 @@ data ShellConfig = ShellConfig
   , trigger     :: KeyEvent             -- this should never be overriden globally, locally it should be overwritten with the keyevent trigger (example at ^L handling)
   , jobManager  :: JobMgr
 
-  -- todo: extract into a separate Object, just like ColorSchemes and Autocomplete. Add settings such as ignore duplicates etc.
-  , history     :: [T.Text]
-  , historyIndex:: Maybe (Int, T.Text)
   , getHistory  :: IO [T.Text]
   
   , builtins    :: [Builtin]

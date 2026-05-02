@@ -71,10 +71,6 @@ instance Def ShellConfig where
     , lastEvent = (KeyModifiers 0, Escape)
     , trigger = (KeyModifiers 0, Escape)
     , jobManager = JobMgr []
-    , history = []
-    , historyIndex = Nothing
-    , getHistory = readHistory defaultHistoryFile
-
     , builtins = def
 
     --, autocomplete = def
