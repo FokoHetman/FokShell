@@ -63,6 +63,7 @@ library
                     , FokShell.Types
                     , FokShell.Module
                     , FokShell.Module.History
+                    , FokShell.Module.Prompt
                     , FokShell.Module.TabCompletion
                     , FokShell.Module.JobManager
                     , FokShell.Module.Preprocessor

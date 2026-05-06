@@ -11,7 +11,7 @@ import Data.Typeable
 class Module' a proc where
   initHook'    :: a -> proc -> IO (a, proc)
   preHook'     :: a -> proc -> KeyEvent -> IO (Bool, (a, proc))
-  postHook'    :: a -> proc -> IO (a, proc)
+  postHook'    :: a -> proc -> KeyEvent -> IO (Bool, (a, proc))
   exitHook'    :: a -> proc -> IO (a, proc)
 
 data Module p where
@@ -22,8 +22,8 @@ initHook (Module a) p = first Module <$> initHook' a p
 
 preHook :: Module p -> p -> KeyEvent -> IO (Bool, (Module p, p))
 preHook (Module a) p e = second (first Module) <$> preHook' a p e
-postHook :: Module p -> p -> IO (Module p, p)
-postHook (Module a) p = first Module <$> postHook' a p
+postHook :: Module p -> p -> KeyEvent -> IO (Bool, (Module p, p))
+postHook (Module a) p e = second (first Module) <$> postHook' a p e
 
 exitHook :: Module p -> p -> IO (Module p, p)
 exitHook (Module a) p = first Module <$> exitHook' a p

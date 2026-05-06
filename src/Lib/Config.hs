@@ -537,17 +537,11 @@ data ShellConfig = ShellConfig
   , binds       :: [(KeyEvent, Action)]
   , lastEvent   :: KeyEvent
   , trigger     :: KeyEvent             -- this should never be overriden globally, locally it should be overwritten with the keyevent trigger (example at ^L handling)
-  , jobManager  :: JobMgr
-
-  , getHistory  :: IO [T.Text]
-  
   , builtins    :: [Builtin]
 
   --, autocomplete:: AutocompleteConfig
   , cursorConfig:: CursorConfig
-
   , completionRules :: [CompletionRule]
-
   , modules :: [Module.Module ShellProcess]
   }
 

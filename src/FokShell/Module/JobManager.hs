@@ -34,12 +34,12 @@ instance Module' JobManagerModule ShellProcess where
               p <- spawnJob (p {shellConfig = conf { input="", cursorLoc=0 }}) job
               pure (Just job, p)
             Nothing -> pure (Nothing, p {shellConfig = conf {input="",cursorLoc=0}})
-          displayPrompt (prompt p'.shellConfig $ colorScheme p'.shellConfig)
+          --displayPrompt (prompt p'.shellConfig $ colorScheme p'.shellConfig)
           case job of 
             Just x -> pure (False, (tc {jobs = x:jobs tc}, p'))
             Nothing -> pure (False, (tc, p'))
     _ -> pure (True, (tc, p))
     where
     conf = p.shellConfig
-  postHook' tc p = pure (tc,p)
+  postHook' tc p e = pure (True,(tc,p))
   exitHook' tc p = pure (tc, p)

@@ -55,7 +55,7 @@ fokshell config = do
   done <- newEmptyMVar
   _ <- installHandler sigINT (Catch $ handleSignal shellProcRef done) Nothing
 
-  displayPrompt $ prompt config $ colorScheme config
+  --displayPrompt $ prompt config $ colorScheme config
   updateCursorShape config
   eventLoop shellProcRef
 
@@ -148,7 +148,7 @@ parseEvent proc' key = do
         case bind of
           (x:_) -> snd x proc
           _ -> pure proc
-  (modules, p) <- chainHook out.shellConfig.modules out postHook
+  (b', (modules, p)) <- chainEventHook out.shellConfig.modules out postHook key
   --bool (autocompleteRedraw out) (pure ()) (colorScheme (shellConfig out) == colorScheme conf)
   --bool (autocompleteOverrides out) (pure ()) (input (shellConfig out) == input conf)
   --autocompleteOverrides out

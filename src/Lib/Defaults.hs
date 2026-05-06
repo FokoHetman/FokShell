@@ -3,15 +3,15 @@ module Lib.Defaults where
 import Lib.Primitive
 import FokShell.Module
 import Lib.Config
-import FokShell.Module.TabCompletion
 import Language.Parser
 import System.Posix (isRegularFile, getFileStatus)
-
 import Data.Text qualified as T
 import Data.Functor
 import Lib.Keys
 import Lib.Format (getFormattedDirectory)
 import FokShell.Module.JobManager
+import FokShell.Module.TabCompletion
+import FokShell.Module.Prompt
 import System.Directory (getHomeDirectory)
 import FokShell.Module.Preprocessor.StringPreprocessors (combineStringPreprocessors, substituter, envVarPreprocessor)
 import Data.List (sort)
@@ -19,9 +19,21 @@ import FokShell.Module.History (withHomeDir, historyFile)
 
 instance Def [Module ShellProcess] where
   def =
-    [ Module TabCompletion {mode = Disabled, selected = Nothing, completions = [], autocomplete = def, maxSuggestions = 10, shadowText = True, sortAlgorithm = const sort}
+    [ Module (def :: PromptModule)
+    , Module TabCompletion
+      { mode = Disabled
+      , selected = Nothing
+      , completions = []
+      , autocomplete = def
+      , maxSuggestions = 10
+      , shadowText = True
+      , sortAlgorithm = const sort
+      }
     , Module $ historyFile (withHomeDir ".config/fokshell/history") 10000
-    , Module JobManagerModule {jobs = [], preprocessors = [combineStringPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]}
+    , Module JobManagerModule 
+      { jobs = []
+      , preprocessors = [combineStringPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]
+      }
     ]
 
 instance Def [CompletionRule] where
@@ -70,7 +82,6 @@ instance Def ShellConfig where
     , binds = def
     , lastEvent = (KeyModifiers 0, Escape)
     , trigger = (KeyModifiers 0, Escape)
-    , jobManager = JobMgr []
     , builtins = def
 
     --, autocomplete = def

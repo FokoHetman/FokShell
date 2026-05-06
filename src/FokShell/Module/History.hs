@@ -80,5 +80,5 @@ instance Module' HistoryModule ShellProcess where
           where
             conf = p.shellConfig
   preHook' tc p _ = pure (True,(tc,p))
-  postHook' tc p = pure ((tc,p))
+  postHook' tc p e = pure (True, (tc,p))
   exitHook' tc p = tc.writeHistory (take tc.entryLimit tc.history) >> pure (tc,p)
