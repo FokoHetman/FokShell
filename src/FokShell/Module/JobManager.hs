@@ -7,10 +7,12 @@ import FokShell.JobManager
 import Lib.Config
 import FokShell.Module
 import Lib.Keys
-import FokShell.Types
+import FokShell.Utils
 import Language.Parser
 import FokShell.Module.Preprocessor
 import Control.Concurrent (newEmptyMVar)
+import FokShell.Module.Prompt (PromptModule, displayPrompt')
+import Data.Proxy
 data JobManagerModule = JobManagerModule
   {
     jobs :: [Job]
@@ -21,7 +23,6 @@ instance Module' JobManagerModule ShellProcess where
   initHook' tc p = pure (tc,p)
   preHook' tc p e = case e of
     (KeyModifiers 0, Enter) -> do
-          swallowPrompt (cursorLoc conf) (input conf) (prompt conf $ colorScheme conf)
           putStrLn ""
           let conf = shellConfig p
           let input' = T.strip $ input conf
@@ -34,12 +35,11 @@ instance Module' JobManagerModule ShellProcess where
               p <- spawnJob (p {shellConfig = conf { input="", cursorLoc=0 }}) job
               pure (Just job, p)
             Nothing -> pure (Nothing, p {shellConfig = conf {input="",cursorLoc=0}})
-          --displayPrompt (prompt p'.shellConfig $ colorScheme p'.shellConfig)
+
+          displayPrompt' p
           case job of 
             Just x -> pure (False, (tc {jobs = x:jobs tc}, p'))
             Nothing -> pure (False, (tc, p'))
     _ -> pure (True, (tc, p))
-    where
-    conf = p.shellConfig
   postHook' tc p e = pure (True,(tc,p))
   exitHook' tc p = pure (tc, p)

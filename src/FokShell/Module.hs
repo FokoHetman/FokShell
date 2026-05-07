@@ -54,3 +54,10 @@ withProxy _ (Module a) = cast a
 requestModule :: forall a p. (Module' a p,Typeable a) => Proxy a -> [Module p] -> [a]
 requestModule p xs = fmap fromJust $ filter isJust $ fmap (withProxy p) xs
 
+modifyModule :: forall a p. (Module' a p,Typeable a) => Proxy a -> [Module p] -> (a -> a) -> [Module p]
+modifyModule _ [] _ = []
+modifyModule p (x:xs) f = fapply:modifyModule p xs f
+  where
+    fapply = case withProxy p x of
+        Just x' -> Module $ f x'
+        Nothing -> x

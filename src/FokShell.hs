@@ -16,7 +16,7 @@ import Control.Concurrent.MVar
 import Data.IORef (newIORef, IORef, writeIORef, readIORef)
 
 import FokShell.JobManager
-import FokShell.Types
+import FokShell.Utils
 import Lib.Format
 --import Lib.Autocomplete
 import Lib.Primitive
@@ -46,17 +46,11 @@ fokshell config = do
   hSetBuffering stdin NoBuffering
   
   proc <- updatePath $ ShellProcess {shellConfig = config, shellState = InputOutput, shellCache = Cache []}
-  doStart <- startHook (hooks config) proc
-  unless doStart exitSuccess
-
   (modules, p) <- chainHook proc.shellConfig.modules proc initHook
   shellProcRef <- newIORef p {shellConfig = p.shellConfig {modules = modules}}
 
   done <- newEmptyMVar
   _ <- installHandler sigINT (Catch $ handleSignal shellProcRef done) Nothing
-
-  --displayPrompt $ prompt config $ colorScheme config
-  updateCursorShape config
   eventLoop shellProcRef
 
 eventLoop :: IORef ShellProcess -> IO ()

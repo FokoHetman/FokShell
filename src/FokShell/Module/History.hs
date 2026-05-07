@@ -18,7 +18,7 @@ import System.Posix (createFile, ownerReadMode, ownerWriteMode, closeFd)
 import Lib.Format
 
 import Data.Functor (($>))
-import FokShell.Types (moveCursor', redrawFromCursor)
+import FokShell.Utils (moveCursor', redrawFromCursor)
 
 data HistoryModule = HistoryModule
   {

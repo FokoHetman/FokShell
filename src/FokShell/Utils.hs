@@ -1,30 +1,18 @@
 {-# LANGUAGE LambdaCase, OverloadedStrings #-}
-module FokShell.Types where
+module FokShell.Utils where
 
 import qualified Data.Text as T
 
-
-import System.Exit (ExitCode (ExitSuccess, ExitFailure))
 import Control.Monad (when, filterM)
 import System.Directory (getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesFileExist, canonicalizePath)
 import System.Posix (getEnv)
 import System.FilePath (takeFileName)
 import Data.Dynamic (toDyn)
 import Data.Functor
-import System.IO (stdout)
-import GHC.IO.Handle
 import Lib.Primitive
 import Lib.Format
 import Lib.Keys
 import Lib.Config
-
--- TODO: extract to a separate file
-
-updateCursorShape :: ShellConfig -> IO ()
-updateCursorShape = (\x -> putStr x <> hFlush stdout) . show . cursorShape . cursorConfig
-
-
-
 
 updatePath :: ShellProcess -> IO ShellProcess 
 updatePath proc = do
@@ -48,14 +36,6 @@ replaceShortcuts [] text = pure text
 clearLines :: Direction -> Int -> IO ()
 clearLines _ 0 = putStr "\ESC[2K\r"
 clearLines d i = putStr "\ESC[2K\r" >> moveCursor d 1 >> clearLines d (i-1)
-
-swallowPrompt :: Int -> T.Text -> Prompt -> IO ()
-swallowPrompt c input = \case
-  SingleLine _ (Swallowed sw) -> putStr "\ESC[2K\r" >> clearLines Up 0 >> (sw >>= putStrf) >> putStrf (T.strip input) >> moveCursor DLeft c
-  MultiLine  t2 (Swallowed sw) -> t2 >>= \t -> clearLines Up (length t - 1) >> (sw >>= putStrf) >> putStrf (T.strip input) >> moveCursor DLeft c
-  SingleLine _ Never -> pure ()
-  MultiLine _ Never -> pure ()
-
 
 redrawFromCursor :: ShellConfig -> IO ()
 redrawFromCursor c = putStrf $ T.concat [erase, lefts, cursorCode]

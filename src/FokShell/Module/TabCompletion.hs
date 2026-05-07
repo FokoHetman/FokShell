@@ -106,7 +106,7 @@ instance Module' TabCompletion ShellProcess where
                   Nothing -> Just 0
           displayCompletions (curWord p.shellConfig) (sort x) sel
           pure (False, (tc {mode = Selection, completions = x, selected = sel}, p))
-      _ -> model (tc.autocomplete) (moddata p) >>= (\case
+      _ -> model (tc.autocomplete) p >>= (\case
         [] -> pure (True, (tc {selected = Nothing},p))
         x -> do
           displayCompletions (curWord p.shellConfig) (sort x) Nothing
@@ -134,17 +134,18 @@ instance Module' TabCompletion ShellProcess where
         right = T.reverse $ T.take i $ T.reverse t
         
         ninput =  left <> with <> right
-  postHook' tc p e = model (tc.autocomplete) (moddata p) >>= \x -> (when (tc.mode == Selection) (cleanPrevious conf.input >> displayCompletions (curWord conf) (fst x) tc.selected) $> (True, (tc {completions = fst x}, p)))
+  postHook' tc p e = model (tc.autocomplete) p >>= \x -> (when (tc.mode == Selection) (cleanPrevious conf.input >> displayCompletions (curWord conf) (fst x) tc.selected) $> (True, (tc {completions = fst x}, p)))
     where
       conf = p.shellConfig
       curWord c = case runParser parseSeq c.input of
         Just (_,n) -> (\(_,c',_,_) -> c') $ extractData' n c.input c.cursorLoc
         Nothing    -> ""
   exitHook' tc p = pure (tc, p)
-moddata :: ShellProcess -> AutocompleteModelData
+{-moddata :: ShellProcess -> AutocompleteModelData
 moddata p = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c,
               historyL = concatMap (\x -> x.history) $ requestModule (Proxy @HistoryModule) $ c.modules, executableList = executablelist' p, builtinNames = fmap fst (builtins c), 
               modelOutput = ([],[]), mCompletionRules = completionRules c} where c = p.shellConfig
+-}
 executablelist' :: ShellProcess -> [T.Text]
 executablelist' p = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache p) "executables" >>= \x -> lookupCache x "execs")
 
@@ -185,7 +186,7 @@ extractData' n t c = extractData n c'
     c' = T.length t - c - wsCount
 
 languageModel :: AutocompleteModel
-languageModel mdata = case runParser parseSeq input of
+languageModel proc@ShellProcess{shellConfig = conf} = case runParser parseSeq input of
   Just (_,n) -> do
     let (node, curArg, curInd, prevArgs) = extractData n cursor'
     case node of
@@ -194,7 +195,7 @@ languageModel mdata = case runParser parseSeq input of
           [] -> pure ([],[])
           x  -> pure (x,[])
         (_exec:xs) -> do
-          let rule = lookupRule (nodeToString e) mdata.mCompletionRules
+          let rule = lookupRule (nodeToString e) conf.completionRules
           argMatches <- case rule of
             Just r -> fmap (\(CompRule e _) -> e) <$> nestNTimes r (xs ++ [curArg]) (length xs)
             Nothing -> fileMatches curArg
@@ -202,40 +203,30 @@ languageModel mdata = case runParser parseSeq input of
       _ -> pure ([],[])
   Nothing -> pure ([],[])
   where
-    input = mdata.modelInput
-    loc = T.length input - mdata.cursorLocation
+    input = conf.input
+    loc = T.length input - conf.cursorLoc
     leftInput = T.take loc input
     wsCount = countMultiple " '\"" leftInput
-    -- | cursor independent of whitespace, perfect for use with my Parser
+    -- cursor independent of whitespace
     cursor' = loc - wsCount
-    execs = dedup $ mdata.executableList ++ mdata.builtinNames
+    execs = dedup $ executablelist' proc ++ fmap fst conf.builtins
 
     fileMatches exec = let 
         d = takeDirectory (T.unpack exec)
       in (doesDirectoryExist d >>= bool (pure False) (getPermissions d <&> readable)) >>= 
         bool (pure []) (getDirectoryContents d <&> filter (T.isPrefixOf exec) . (bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` exec) <$>) . fmap T.pack)
 
-languageHook :: AutocompleteModelData -> IO ()
+languageHook :: ShellProcess -> IO ()
 languageHook = undefined
 
-languageFullRedraw :: AutocompleteModelData -> IO ()
+languageFullRedraw :: ShellProcess -> IO ()
 languageFullRedraw = undefined
-type AutocompleteModel = AutocompleteModelData -> IO ([T.Text], [T.Text])
-data AutocompleteModelData = AutocompleteModelData {
-    modelInput      :: T.Text
-  , cursorLocation  :: Int
-  , aColorScheme    :: ColorScheme
-  , modelOutput     :: ([T.Text], [T.Text])
-  , builtinNames    :: [T.Text]
-  , executableList  :: [T.Text]
-  , historyL        :: [T.Text]
-  , mCompletionRules:: [CompletionRule]
-}
+type AutocompleteModel = ShellProcess -> IO ([T.Text], [T.Text])
 
 data AutocompleteConfig = AutocompleteConfig {
     model      :: AutocompleteModel
-  , redrawHook :: AutocompleteModelData -> IO ()
-  , fullRedraw :: AutocompleteModelData -> IO ()
+  , redrawHook :: ShellProcess -> IO ()
+  , fullRedraw :: ShellProcess -> IO ()
   }
 
 instance Def AutocompleteConfig where

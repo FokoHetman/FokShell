@@ -60,8 +60,10 @@ library
     -- Modules exported by the library.
     exposed-modules:  FokShell
                     , FokShell.JobManager
-                    , FokShell.Types
+                    , FokShell.Utils
                     , FokShell.Module
+                    , FokShell.Module.Colorscheme
+                    , FokShell.Module.Cursor
                     , FokShell.Module.History
                     , FokShell.Module.Prompt
                     , FokShell.Module.TabCompletion
@@ -150,4 +152,5 @@ executable hetmanshell
         , unix
         , hostname
         , fokshell
+        , directory
 

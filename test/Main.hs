@@ -1,107 +1,136 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, OverloadedRecordDot #-}
 module Main (main) where
 
 import System.Posix (getEffectiveUserName)
 
 
 import FokShell
-import FokShell.Types
-import Lib.ColorScheme
+import FokShell.Utils
+import FokShell.Module
+import FokShell.Module.Colorscheme
+import FokShell.Module.TabCompletion
+import FokShell.Module.Preprocessor
+import FokShell.Module.Preprocessor.StringPreprocessors
+import FokShell.Module.History
+import FokShell.Module.JobManager
+import FokShell.Module.Prompt
+
 import Lib.Primitive
 import Lib.Format
 import Lib.Config
 import Lib.Keys
 import Lib.Defaults
 
+import System.Directory (getHomeDirectory)
 import qualified Data.Text as T
-
 import Control.Monad (when)
 import Data.Functor
-
 import Network.HostName
---import Lib.Autocomplete (AutocompleteConfig(AutocompleteConfig, redrawHook, model), languageHook, languageModel)
+import Data.List (sort)
 
-myHooks :: ShellHooks
-myHooks = def
 
-myColorScheme :: ColorScheme
-myColorScheme = def {
-    scheme_id = "gruvbox"
-  , colors = [
-      ("c0", pure $ RGB 184 187 38)
-    , ("c1", pure $ RGB 214 93 14)
+gruvbox :: Colorscheme
+gruvbox = Colorscheme {
+    userColors = [
+      RGB 184 187 38
+    , RGB 214 93 14
     ]
-  , textColor = pure $ RGB 235 219 178
-  , shadowText = pure $ RGB 60 60 60
+  , textColor = RGB 235 219 178
+  , successColor = RGB 0 255 0
+  , errorColor = RGB 255 0 0
+  , infoColor = RGB 60 60 60
+  }
+gruvboxLight :: Colorscheme
+gruvboxLight = Colorscheme {
+    userColors = [
+      RGB 235 219 178
+    , RGB 214 93 14
+    ]
+  , textColor = RGB 129 132 133
+  , successColor = RGB 0 255 0
+  , errorColor = RGB 255 0 0
+  , infoColor = RGB 29 32 33
   }
 
-myLightColorScheme :: ColorScheme
-myLightColorScheme = def {
-    scheme_id = "light"
-  , colors = [
-      ("c0", pure $ RGB 235 219 178)
-    , ("c1", pure $ RGB 214 93 14)
+latte :: Colorscheme
+latte = Colorscheme {
+    userColors = [
+      RGB 221 120 120
+    , RGB 214 93 14
     ]
-  , textColor = pure $ RGB 129 132 133
-  , shadowText = pure $ RGB 29 32 33
-  }
-
-latteColorScheme :: ColorScheme
-latteColorScheme = def {
-    scheme_id = "latte"
-  , colors = [
-      ("c0", pure $ RGB 221 120 120)
-    , ("c1", pure $ RGB 214 93 14)
-    ]
-  , textColor = pure $ RGB 129 132 133
-  , shadowText = pure $ RGB 29 32 33
+  , textColor = RGB 129 132 133
+  , successColor = RGB 0 255 0
+  , errorColor = RGB 255 0 0
+  , infoColor = RGB 29 32 33
   }
 
 
 
-colorSchemes :: [ColorScheme]
-colorSchemes = [myColorScheme, myLightColorScheme, latteColorScheme]
+colorSchemes :: [Colorscheme]
+colorSchemes = [gruvbox, gruvboxLight, latte]
 
-{- TODO: make this work. Probably make Prompt/prompt's text a ~ function that takes a colorscheme -} 
-myPrompt :: ColorScheme -> Prompt
-myPrompt cs = SingleLine (r "%c0%B[%u@%h:%d]$ %cl") $ Swallowed (r "%c0%B%d> %cl")
-  where
-    r = replaceShortcuts $ [("%B", pure "\ESC[1m"), ("%cl", pure "\ESC[0m"), ("%u", T.pack <$> getEffectiveUserName), ("%d", getFormattedDirectory), ("%h", T.pack <$> getHostName)] ++ generateColorShortcuts cs
+myPrompt :: PromptModule
+myPrompt = PromptModule 
+  { components =
+    fmap (PromptComponent . TextComponent)
+    [ (pure "[", \cs -> foreground $ cs.userColors!!0)
+    , (T.pack <$> getEffectiveUserName, \cs -> bold <> foreground (cs.userColors!!0))
+      , (pure "@", \cs -> foreground $ cs.userColors!!0)
+      , (T.pack <$> getHostName, \cs -> bold <> foreground (cs.userColors!!0))
+      , (pure ":", \cs -> foreground $ cs.userColors!!0)
+      , (getFormattedDirectory, \cs -> bold <> foreground (cs.userColors!!0))
+      , (pure "]$ ", \cs -> foreground $ cs.userColors!!0)
+    ]
+  }
 
-{-
- - cool example for docs
- - MultiLine 
-  (mapM (replaceShortcuts [("%u", T.pack <$> getEffectiveUserName), ("%d", getFormattedDirectory), ("%h", T.pack <$> getHostName)]) [
-    "╭──%u@%h───%d──────",
-    "╰──>"
-  ]) $ Swallowed (replaceShortcuts [("%u", T.pack <$> getEffectiveUserName), ("%d", getFormattedDirectory), ("%h", T.pack <$> getHostName)] "%u> ")
--}
+myCoolPrompt :: PromptModule
+myCoolPrompt = PromptModule
+  { components = fmap (PromptComponent . TextComponent) [
+      (pure "╭──", \cs -> foreground $ head cs.userColors)
+    , (T.pack <$> getEffectiveUserName, \cs -> foreground (head cs.userColors) <> bold)
+    , (pure "@", \cs -> foreground $ head cs.userColors)
+    , (T.pack <$> getHostName, \cs -> foreground (head cs.userColors) <> bold)
+    , (pure "───", \cs -> foreground $ head cs.userColors)
+    , (getFormattedDirectory, \cs -> foreground (head cs.userColors) <> bold)
+    , (pure "──────", \cs -> foreground $ head cs.userColors)
+    , (pure "\n╰──>", \cs -> foreground $ head cs.userColors)
+    ]
+  }
 
-redraw :: ShellConfig -> IO ()
-
-redraw c = clear >> rPrompt >> dinput >> updCursor
+redraw :: ShellProcess -> IO ()
+redraw proc@ShellProcess{shellConfig = c} = clear >> rPrompt >> dinput >> updCursor
   where
     clear = putStrf "\ESC[2K\r"
-    rPrompt = displayPrompt (prompt c $ colorScheme c)
+    rPrompt = displayPrompt' proc
     dinput = putStrf $ input c
     updCursor = when (cursorLoc c > 0) $ moveCursor DLeft $ cursorLoc c
 
 main :: IO ()
-main = do
-  fokshell $ def
-    { hooks = myHooks
-    , prompt = myPrompt
-    , colorScheme = myColorScheme
-    , binds = def ++ [
-      ((control, Character "t"), \proc -> 
-        let config = shellConfig proc in let conf = config {colorScheme = nextColorScheme (colorScheme config)} in redraw conf $> proc {shellConfig = conf})
-    ]
---    , autocomplete = def
+main = fokshell $ def
+    { binds = def ++ [
+      {-((control, Character "t"), \proc -> 
+        let config = shellConfig proc in let conf = config {colorScheme = nextColorScheme (colorScheme config)} in redraw conf $> proc {shellConfig = conf})-}
+      ]
+    , modules =
+      [ 
+        Module ColorschemeModule 
+        { colorschemes = colorSchemes
+        , current = 0
+        }
+      , Module TabCompletion
+        { mode = Disabled
+        , selected = Nothing
+        , completions = []
+        , autocomplete = def
+        , maxSuggestions = 10
+        , shadowText = True
+        , sortAlgorithm = const sort
+        }
+      , Module JobManagerModule 
+        { jobs = []
+        , preprocessors = [combineStringPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]
+        }
+      , Module myPrompt
+      , Module $ historyFile (withHomeDir ".config/fokshell/history") 10000
+      ]
     }
-    where
-      index cur = indexOf cur colorSchemes + 1
-      nextColorScheme current = colorSchemes!!(if index current>=length colorSchemes then 0 else index current)
-
-indexOf x xs = indexOf' x xs 0
-indexOf' x (y:ys) i = if x==y then i else indexOf' x ys (i+1)
-indexOf' x [] i = -1
