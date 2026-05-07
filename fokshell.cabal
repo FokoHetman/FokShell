@@ -59,29 +59,24 @@ library
 
     -- Modules exported by the library.
     exposed-modules:  FokShell
+                    , FokShell.Builtin
                     , FokShell.JobManager
                     , FokShell.Utils
                     , FokShell.Module
                     , FokShell.Module.Colorscheme
                     , FokShell.Module.Cursor
                     , FokShell.Module.History
-                    , FokShell.Module.Prompt
-                    , FokShell.Module.TabCompletion
                     , FokShell.Module.JobManager
                     , FokShell.Module.Preprocessor
                     , FokShell.Module.Preprocessor.StringPreprocessors
---                    , ExposedTypes
-                    , Lib.ColorScheme
+                    , FokShell.Module.Prompt
+                    , FokShell.Module.TabCompletion
                     , Lib.Primitive
---                    , Lib.Autocomplete
                     , Lib.Format
-                    , Lib.Config
-                    , Lib.Defaults
+                    , FokShell.Types
+                    , FokShell.Defaults
                     , Lib.Keys
                     , Language.Parser
-                    --, Language.Autocomplete
---                    , FokShell.InputHandling
---                    , JobManager
 
     -- Modules included in this library but not exported.
     other-modules:    FokShell.InputHandling
@@ -102,6 +97,7 @@ library
                     , containers
                     , regex-tdfa
                     , bytestring
+                    , formatting
 
     -- Directories containing source files.
     hs-source-dirs:   src

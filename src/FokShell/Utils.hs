@@ -1,18 +1,29 @@
 {-# LANGUAGE LambdaCase, OverloadedStrings #-}
 module FokShell.Utils where
 
+import FokShell.Module qualified as Module
+
 import qualified Data.Text as T
+import qualified Data.Text.IO as T
 
 import Control.Monad (when, filterM)
 import System.Directory (getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesFileExist, canonicalizePath)
 import System.Posix (getEnv)
 import System.FilePath (takeFileName)
-import Data.Dynamic (toDyn)
+import Data.Dynamic (toDyn, Typeable)
 import Data.Functor
 import Lib.Primitive
 import Lib.Format
 import Lib.Keys
-import Lib.Config
+import FokShell.Types
+import GHC.IO.Exception (ExitCode (ExitSuccess, ExitFailure))
+import Language.Parser
+import Filesystem (IOMode(WriteMode, AppendMode))
+import Control.Concurrent (newEmptyMVar, newMVar)
+
+import Data.Map qualified as Map
+import Data.Data (Proxy)
+import Data.List (intersperse)
 
 updatePath :: ShellProcess -> IO ShellProcess 
 updatePath proc = do
@@ -29,9 +40,9 @@ updatePath proc = do
   where
     pathExecutables = mapM executablesInDir =<< getDirsInPath
 
-replaceShortcuts :: [(T.Text, IO T.Text)] -> T.Text -> IO T.Text
-replaceShortcuts (x:xs) t = snd x >>= \y -> replaceShortcuts xs (T.replace (fst x) y t)
-replaceShortcuts [] text = pure text
+exitCodeToInt :: ExitCode -> Int
+exitCodeToInt ExitSuccess     = 0
+exitCodeToInt (ExitFailure c) = c
 
 clearLines :: Direction -> Int -> IO ()
 clearLines _ 0 = putStr "\ESC[2K\r"
@@ -50,5 +61,73 @@ moveCursor' c DRight i = when (cursorLoc c > 0)  (moveCursor DRight i)
 moveCursor' _ _ _ = error "unsupported '-wrapped direction"
 
 
+mkTask' :: T.Text -> Maybe (IO Task)
+mkTask' t = runParser parseSeq t <&> mkTask . snd
+
+mkTask :: Node -> IO Task
+mkTask (Sequence n1 n2) = do
+  n2' <- mkTask n2
+  n1' <- mkTask n1
+  pure n2' {prevTask = Just n1', condition = const True}
+mkTask (And n1 n2) = do
+  n2' <- mkTask n2
+  n1' <- mkTask n1
+  pure $ n2' {prevTask = Just n1', condition = (==0) . exitCodeToInt}
+mkTask (Pipe pt n1 n2) = case pt of
+  ProcessPipe -> do
+    n2' <- mkTask n2
+    n1' <- mkTask n1
+    ref2 <- newEmptyMVar
+    pure n2' {pipeIn = ProcessData ref2, prevTask = Just $ n1' {pipeOut = ProcessData ref2}}
+  Write Stdout -> mkFilePipe n1 n2 Stdout WriteMode
+  Write Stderr -> mkFilePipe n1 n2 Stderr WriteMode
+  Append Stdout -> mkFilePipe n1 n2 Stdout AppendMode
+  Append Stderr -> mkFilePipe n1 n2 Stderr AppendMode
+  Read -> undefined
+  where
+    mkFilePipe n1 n2 Stdout mode = do
+      n1' <- mkTask n1
+      pure n1' {pipeOut = File (T.unpack $ nodeToString n2) mode}
+    mkFilePipe n1 n2 Stderr mode = do
+      n1' <- mkTask n1
+      pure n1' {pipeErr = File (T.unpack $ nodeToString n2) mode}
+mkTask (ProcessCall (NodeString pname _) args) = pure Task {
+  procName = pname
+, procArgs = fmap nodeToString args
+, pipeIn = Terminal
+, pipeOut = Terminal
+, pipeErr = Terminal
+, prevTask = Nothing
+-- | given exit code of prevTask determines whether this task should run
+, condition = const True
+}
+mkTask (Table t) = do
+  h <- newMVar $ Left (Table t)
+  pure Task {
+    procName = "table"
+  , procArgs = []
+  , pipeIn = ProcessData h
+  , pipeOut = ProcessData h
+  , pipeErr = Terminal
+  , prevTask = Nothing
+  , condition = const True
+  }
+mkTask x = error $ "unknown task: " <> show x
+
+
+modifyModule' :: forall a. (Module.Module' a ShellProcess,Typeable a) => Proxy a -> ShellProcess -> (a -> a) -> ShellProcess
+modifyModule' p proc f = proc {shellConfig = proc.shellConfig {modules = Module.modifyModule p proc.shellConfig.modules f}}
+
 updateWithKey :: KeyEvent -> ShellProcess -> ShellProcess
 updateWithKey event proc = proc {shellConfig = (shellConfig proc) {lastEvent=event}}
+
+tableToJson :: (Map.Map Node Node) -> T.Text
+tableToJson t = "{" <> T.concat (intersperse ",\n" $ fmap display' $ Map.toList t) <> "}"
+
+displayTable :: (Map.Map Node Node) -> IO ()
+displayTable t = T.putStrLn $ T.concat $ intersperse "\n" $ fmap display' $ Map.toList t
+
+display' :: (Node, Node) -> T.Text
+display' (n1, n2) = nodeToString n1 <> ": " <> nodeToString n2
+
+

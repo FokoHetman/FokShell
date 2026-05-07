@@ -4,20 +4,28 @@ module FokShell.Module.JobManager where
 import Data.Text qualified as T
 import Data.Functor ((<&>))
 import FokShell.JobManager
-import Lib.Config
+import FokShell.Types
 import FokShell.Module
-import Lib.Keys
 import FokShell.Utils
+import Lib.Keys
 import Language.Parser
 import FokShell.Module.Preprocessor
 import Control.Concurrent (newEmptyMVar)
-import FokShell.Module.Prompt (PromptModule, displayPrompt')
-import Data.Proxy
+import FokShell.Module.Prompt (displayPrompt')
+import Lib.Primitive
+import FokShell.Module.Preprocessor.StringPreprocessors
+import System.Directory (getHomeDirectory)
 data JobManagerModule = JobManagerModule
   {
     jobs :: [Job]
   , preprocessors :: [Preprocessor]
   }
+
+instance Def JobManagerModule where
+  def = JobManagerModule
+    { jobs = []
+    , preprocessors = [combineStringPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]
+    }
 
 instance Module' JobManagerModule ShellProcess where
   initHook' tc p = pure (tc,p)

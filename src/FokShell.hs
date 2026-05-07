@@ -21,7 +21,7 @@ import Lib.Format
 --import Lib.Autocomplete
 import Lib.Primitive
 import Lib.Keys
-import Lib.Config
+import FokShell.Types
 
 import Data.Dynamic (fromDynamic)
 import Data.Maybe (fromMaybe)

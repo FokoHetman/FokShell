@@ -2,7 +2,7 @@
 module FokShell.Module.Prompt where
 import FokShell.Module
 import FokShell.Module.Colorscheme
-import Lib.Config
+import FokShell.Types
 import Lib.Keys
 import Lib.Primitive
 import Data.Text qualified as T

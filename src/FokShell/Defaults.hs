@@ -1,8 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Lib.Defaults where
+module FokShell.Defaults where
 import Lib.Primitive
 import FokShell.Module
-import Lib.Config
+import FokShell.Types
 import Language.Parser
 import Data.Text qualified as T
 import Data.Text.IO qualified as T
@@ -14,8 +14,10 @@ import FokShell.Module.Prompt
 import System.Directory (getHomeDirectory)
 import FokShell.Module.Preprocessor.StringPreprocessors (combineStringPreprocessors, substituter, envVarPreprocessor)
 import Data.List (sort)
-import FokShell.Module.History (withHomeDir, historyFile)
+import FokShell.Module.History (withHomeDir, historyFile, HistoryModule)
 import System.Exit (exitSuccess)
+
+import FokShell.Builtin
 
 import FokShell.Module qualified as Module
 import GHC.IO.Handle (hFlush)
@@ -24,20 +26,9 @@ import System.IO (stdout)
 instance Def [Module ShellProcess] where
   def =
     [ Module (def :: PromptModule)
-    , Module TabCompletion
-      { mode = Disabled
-      , selected = Nothing
-      , completions = []
-      , autocomplete = def
-      , maxSuggestions = 10
-      , shadowText = True
-      , sortAlgorithm = const sort
-      }
-    , Module $ historyFile (withHomeDir ".config/fokshell/history") 10000
-    , Module JobManagerModule 
-      { jobs = []
-      , preprocessors = [combineStringPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]
-      }
+    , Module (def :: TabCompletion)
+    , Module (def :: HistoryModule)
+    , Module (def :: JobManagerModule)
     ]
 
 instance Def [CompletionRule] where
@@ -58,7 +49,7 @@ instance Def [Builtin] where
 
 
 haltAction :: Action
-haltAction proc = displayPrompt' proc $> proc {shellConfig = proc.shellConfig {input = "",cursorLoc=0}}
+haltAction proc = putStrLn "^C" >> displayPrompt' proc $> proc {shellConfig = proc.shellConfig {input = "",cursorLoc=0}}
 
 exitAction :: Action
 exitAction p = Module.chainHook p.shellConfig.modules p Module.exitHook >> exitSuccess

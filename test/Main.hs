@@ -8,18 +8,19 @@ import FokShell
 import FokShell.Utils
 import FokShell.Module
 import FokShell.Module.Colorscheme
-import FokShell.Module.TabCompletion
-import FokShell.Module.Preprocessor
-import FokShell.Module.Preprocessor.StringPreprocessors
+import FokShell.Module.Cursor
 import FokShell.Module.History
 import FokShell.Module.JobManager
+import FokShell.Module.Preprocessor
+import FokShell.Module.Preprocessor.StringPreprocessors
 import FokShell.Module.Prompt
+import FokShell.Module.TabCompletion
 
 import Lib.Primitive
 import Lib.Format
-import Lib.Config
+import FokShell.Types
 import Lib.Keys
-import Lib.Defaults
+import FokShell.Defaults
 
 import System.Directory (getHomeDirectory)
 import qualified Data.Text as T
@@ -97,6 +98,14 @@ myCoolPrompt = PromptModule
     ]
   }
 
+myCursor :: CursorModule
+myCursor = CursorModule
+  {
+    shape = BlinkingBar
+  , color = RGB 255 255 255
+  }
+  
+
 redraw :: ShellProcess -> IO ()
 redraw proc@ShellProcess{shellConfig = c} = clear >> rPrompt >> dinput >> updCursor
   where
@@ -113,7 +122,8 @@ main = fokshell $ def
       ]
     , modules =
       [ 
-        Module ColorschemeModule 
+        Module (myCursor :: CursorModule)
+      , Module ColorschemeModule 
         { colorschemes = colorSchemes
         , current = 0
         }

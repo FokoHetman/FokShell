@@ -8,7 +8,7 @@ import Lib.Keys
 import Data.Text qualified as T
 import Data.Text.IO qualified as T
 import Language.Parser
-import Lib.Config
+import FokShell.Types
 import Lib.Primitive
 import Data.Maybe (fromMaybe)
 import Data.Dynamic (fromDynamic)
@@ -19,7 +19,6 @@ import System.IO
 import Data.Functor
 import Data.Bool (bool)
 import Control.Monad (when)
-import Lib.ColorScheme
 
 import Data.Proxy
 import Control.Arrow (Arrow(first))

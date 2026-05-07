@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module FokShell.JobManager where
-import Lib.Config
+import FokShell.Types
+import FokShell.Utils
 import Data.Text qualified as T
 
 import GHC.IO.Exception (ExitCode)

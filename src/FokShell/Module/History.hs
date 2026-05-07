@@ -11,7 +11,7 @@ import System.FilePath ((</>), takeDirectory)
 import Lib.Primitive
 import System.Directory (getHomeDirectory, doesFileExist, createDirectory, createDirectoryIfMissing)
 import FokShell.Module
-import Lib.Config
+import FokShell.Types
 import Lib.Keys
 import Control.Monad (unless, when)
 import System.Posix (createFile, ownerReadMode, ownerWriteMode, closeFd)
