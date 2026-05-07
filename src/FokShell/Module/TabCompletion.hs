@@ -55,20 +55,24 @@ instance Def TabCompletion where
 cleanPrevious :: T.Text -> IO ()
 cleanPrevious inp = T.putStr (moveCursorRaw DRight (T.length inp) <> "\ESC[0J" <> moveCursorRaw DLeft (T.length inp)) >> hFlush stdout
 
-displayCompletions :: T.Text -> [T.Text] -> Maybe Int -> IO ()
-displayCompletions _ [] _ = pure ()
-displayCompletions current (x:xs) selected = do
+-- TODO: Integrate Colorscheme into this, perhaps a Renderer would be useful though
+displayCompletions :: T.Text -> [T.Text] -> Maybe Int -> Int -> IO ()
+displayCompletions _ [] _ _ = pure ()
+displayCompletions current (x:xs) selected displayed = do
   T.putStr $
     -- setup
     moveCursorRaw DLeft (curLen + leftLen) <> moveCursorRaw Down 1
     -- display
-    <> display completions selected
+    <> display completions ((\x -> x-prev) <$> selected)
     -- restore
     <> moveCursorRaw DLeft (maxLen + rightLen - curLen)
     <> moveCursorRaw Up (length completions + 1)
   hFlush stdout
   where
-    completions = x:xs
+    prev = case selected of
+      Just s -> (s `div` displayed)*displayed
+      Nothing -> 0
+    completions = take displayed $ drop prev $ x:xs
     curLen = T.length current
     left = "| "
     right = " |"
@@ -89,7 +93,7 @@ instance Module' TabCompletion ShellProcess where
         [] -> pure (True, (tc,p))
         [x] -> (False,) . (tc,) <$> replaceCurrentIO x p
         x -> do
-          displayCompletions (curWord p.shellConfig) (sort x) tc.selected
+          displayCompletions (curWord p.shellConfig) (sort x) tc.selected tc.maxSuggestions
           pure (False, (tc {mode = Selection, completions = x, selected = Just 0 {- len is at least 2 -}}, p))
       _ -> pure (True, (tc,p))
     Selection -> cleanPrevious p.shellConfig.input >> case e of
@@ -103,12 +107,12 @@ instance Module' TabCompletion ShellProcess where
           let sel = case tc.selected of
                   Just a -> Just $ bool (a+1) 0 (a+1==length tc.completions)
                   Nothing -> Just 0
-          displayCompletions (curWord p.shellConfig) (sort x) sel
+          displayCompletions (curWord p.shellConfig) (sort x) sel tc.maxSuggestions
           pure (False, (tc {mode = Selection, completions = x, selected = sel}, p))
       _ -> model (tc.autocomplete) p >>= (\case
         [] -> pure (True, (tc {selected = Nothing},p))
         x -> do
-          displayCompletions (curWord p.shellConfig) (sort x) Nothing
+          displayCompletions (curWord p.shellConfig) (sort x) Nothing tc.maxSuggestions
           pure (True, (tc {selected = Nothing},p))
         ) . fst
     where
@@ -133,7 +137,7 @@ instance Module' TabCompletion ShellProcess where
         right = T.reverse $ T.take i $ T.reverse t
         
         ninput =  left <> with <> right
-  postHook' tc p e = model (tc.autocomplete) p >>= \x -> (when (tc.mode == Selection) (cleanPrevious conf.input >> displayCompletions (curWord conf) (fst x) tc.selected) $> (True, (tc {completions = fst x}, p)))
+  postHook' tc p e = model (tc.autocomplete) p >>= \x -> (when (tc.mode == Selection) (cleanPrevious conf.input >> displayCompletions (curWord conf) (fst x) tc.selected tc.maxSuggestions) $> (True, (tc {completions = fst x}, p)))
     where
       conf = p.shellConfig
       curWord c = case runParser parseSeq c.input of
