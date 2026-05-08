@@ -18,14 +18,13 @@ import Data.Map qualified as Map
 
 
 -- builtins {{{
-table, cd, bmap, regex :: Builtin
-table = ("table", table')
+set, cd, bmap, regex :: Builtin
+set = ("set", set')
 cd = ("cd", cd')
 bmap = ("map", bmap')
 regex = ("regex", regex')
 
-
-cd', table', bmap', regex' :: [T.Text] -> (TaskPipeType,TaskPipeType,TaskPipeType) -> ShellProcess -> IO (ExitCode,ShellProcess)
+cd', set', bmap', regex' :: [T.Text] -> (TaskPipeType,TaskPipeType,TaskPipeType) -> ShellProcess -> IO (ExitCode,ShellProcess)
 cd' args (_inh, outh, errh) process = do
     errHandle <- case errh of
       Terminal -> pure stderr
@@ -39,18 +38,18 @@ cd' args (_inh, outh, errh) process = do
       []  -> writeErr "cd: no arg provided.\n"
       _   -> writeErr "cd: too many args provided.\n"
     pure (ExitSuccess, process)
-table' args (inh, outh, errh) process = let
+set' args (inh, outh, errh) process = let
       f n = case outh of
-          ProcessData oref -> putMVar oref (Left $ Table n) $> (ExitSuccess, process)
-          Terminal -> displayTable n $> (ExitSuccess, process)
-          File fname mode -> (openFile fname mode >>= (`T.hPutStr` (tableToJson n))) $> (ExitSuccess, process)
+          ProcessData oref -> putMVar oref (Left $ Set n) $> (ExitSuccess, process)
+          Terminal -> displaySet n $> (ExitSuccess, process)
+          File fname mode -> (openFile fname mode >>= (`T.hPutStr` (setToJson n))) $> (ExitSuccess, process)
     in case inh of
       ProcessData ref -> readMVar ref >>= \case
-        Left (Table n) -> f n 
+        Left (Set n) -> f n 
         Right h -> do
           content <- hGetContents h
-          case runParser jsontable $ T.pack content of
-            Just (_,(Table n)) -> f n
+          case runParser jsonset $ T.pack content of
+            Just (_,(Set n)) -> f n
             _ -> error "no parse"
         _ -> error "invalid argument"
       _ -> undefined
@@ -62,7 +61,7 @@ bmap' args (inh, outh, errh) process = case inh of
         Left n -> do
           let ns = case n of
                 Array ns' -> ns'
-                Table ns' -> fmap snd $ Map.toList ns'
+                Set ns' -> fmap snd $ Map.toList ns'
                 _ -> undefined
           let defaultTask = Task {
             procName = name
@@ -80,7 +79,7 @@ bmap' args (inh, outh, errh) process = case inh of
           -- TODO: collect out into whatever `n` is and push into outh
           mapM_ (executeTask process) tasks
           pure (ExitSuccess, process)
-        Right _ -> error "map expects either an Array or a Table"
+        Right _ -> error "map expects either an Array or a Set"
     _ -> undefined
 regex' args (inh, outh, errh) process = case inh of
     ProcessData ref -> do

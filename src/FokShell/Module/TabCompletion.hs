@@ -55,7 +55,6 @@ instance Def TabCompletion where
 cleanPrevious :: T.Text -> IO ()
 cleanPrevious inp = T.putStr (moveCursorRaw DRight (T.length inp) <> "\ESC[0J" <> moveCursorRaw DLeft (T.length inp)) >> hFlush stdout
 
--- TODO: Integrate Colorscheme into this, perhaps a Renderer would be useful though
 displayCompletions :: T.Text -> [T.Text] -> Maybe Int -> Int -> IO ()
 displayCompletions _ [] _ _ = pure ()
 displayCompletions current (x:xs) selected displayed = do
@@ -172,7 +171,7 @@ extractData (ProcessCall e args) c = (ProcessCall e args, l!!currentI, index, ta
 extractData (Sequence left right) c = bool (extractData left c) (extractData right (c - nlength left - 1)) (c > nlength left)
 extractData (And left right) c = bool (extractData left c) (extractData right (c - nlength left - 2)) (c > nlength left)
 extractData (Pipe ps left right) c = bool (extractData left c) (extractData right (c - nlength left - pipelength ps)) (c > nlength left)
-extractData (Table t) c = f (c-1) $ Map.toList t
+extractData (Set t) c = f (c-1) $ Map.toList t
   where
     f _ [] = undefined
     f i [(n1,n2)] = bool (extractData n1 i) (extractData n2 $ i - nlength n1 - 1) $ i<nlength n1

@@ -16,7 +16,7 @@ combineStringPreprocessors :: [Preprocessor] -> Preprocessor
 combineStringPreprocessors pp n@(NodeString _ True) = connectPreprocessors pp n
 combineStringPreprocessors _  n@(NodeString _ False) = pure n
 combineStringPreprocessors pp n@(Path _) = connectPreprocessors pp n
-combineStringPreprocessors pp (Table t) = Table . M.fromList <$> mapM (\(x,y) -> do
+combineStringPreprocessors pp (Set t) = Set . M.fromList <$> mapM (\(x,y) -> do
       y' <- combineStringPreprocessors pp y
       pure (x,y')
     ) (M.toList t)

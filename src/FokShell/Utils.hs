@@ -31,14 +31,14 @@ updatePath proc = do
     Just x -> pure x
     _ -> pure ""
   localFiles <- getDirectoryContents =<< getCurrentDirectory
-  localExecutables <- fmap ("./" <>) <$> (mapM canonicalizePath localFiles >>= filterM (fmap executable . getPermissions))
-  pathExecs <- (pathExecutables >>= mapM canonicalizePath . concat)  <&> fmap takeFileName
-  let envcache = Entry ("executables", Cache [Entry ("PATH", toDyn path), Entry ("execs", toDyn $ fmap T.pack $ pathExecs ++ localExecutables)])
+  localExecusets <- fmap ("./" <>) <$> (mapM canonicalizePath localFiles >>= filterM (fmap executable . getPermissions))
+  pathExecs <- (pathExecusets >>= mapM canonicalizePath . concat)  <&> fmap takeFileName
+  let envcache = Entry ("executables", Cache [Entry ("PATH", toDyn path), Entry ("execs", toDyn $ fmap T.pack $ pathExecs ++ localExecusets)])
 
   pure proc {shellCache = Cache $ getCache (removeFromCache (shellCache proc) "executables") ++ [envcache]}
   
   where
-    pathExecutables = mapM executablesInDir =<< getDirsInPath
+    pathExecusets = mapM executablesInDir =<< getDirsInPath
 
 exitCodeToInt :: ExitCode -> Int
 exitCodeToInt ExitSuccess     = 0
@@ -101,10 +101,10 @@ mkTask (ProcessCall (NodeString pname _) args) = pure Task {
 -- | given exit code of prevTask determines whether this task should run
 , condition = const True
 }
-mkTask (Table t) = do
-  h <- newMVar $ Left (Table t)
+mkTask (Set t) = do
+  h <- newMVar $ Left (Set t)
   pure Task {
-    procName = "table"
+    procName = "set"
   , procArgs = []
   , pipeIn = ProcessData h
   , pipeOut = ProcessData h
@@ -121,11 +121,11 @@ modifyModule' p proc f = proc {shellConfig = proc.shellConfig {modules = Module.
 updateWithKey :: KeyEvent -> ShellProcess -> ShellProcess
 updateWithKey event proc = proc {shellConfig = (shellConfig proc) {lastEvent=event}}
 
-tableToJson :: (Map.Map Node Node) -> T.Text
-tableToJson t = "{" <> T.concat (intersperse ",\n" $ fmap display' $ Map.toList t) <> "}"
+setToJson :: (Map.Map Node Node) -> T.Text
+setToJson t = "{" <> T.concat (intersperse ",\n" $ fmap display' $ Map.toList t) <> "}"
 
-displayTable :: (Map.Map Node Node) -> IO ()
-displayTable t = T.putStrLn $ T.concat $ intersperse "\n" $ fmap display' $ Map.toList t
+displaySet :: (Map.Map Node Node) -> IO ()
+displaySet t = T.putStrLn $ T.concat $ intersperse "\n" $ fmap display' $ Map.toList t
 
 display' :: (Node, Node) -> T.Text
 display' (n1, n2) = nodeToString n1 <> ": " <> nodeToString n2

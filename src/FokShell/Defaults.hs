@@ -43,7 +43,7 @@ instance Def [Builtin] where
       cd
     , bmap
     , regex
-    , table
+    , set
     ]
 
 

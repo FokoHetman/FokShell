@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase, GADTs #-}
 module Language.Parser where
 
 import Data.Map qualified as Map
@@ -13,14 +13,16 @@ import System.FilePath
 import Control.Monad (filterM, join)
 import Debug.Trace (traceShow)
 import Data.Bifunctor (Bifunctor(bimap))
+import Data.Data (Typeable)
 
 data StdMode = Stdout | Stderr deriving (Eq, Ord, Show)
 data PipeType = ProcessPipe | Write StdMode | Append StdMode | Read deriving (Eq, Ord, Show)
 
-data Node = {-operations-}  ProcessCall Node [Node] | And Node Node | Pipe PipeType Node Node | Sequence Node Node | Or Node Node |
-            {-abstract-}    Table (Map.Map Node Node) | Array [Node] |
+{-data Node = {-operations-}  ProcessCall Node [Node] | And Node Node | Pipe PipeType Node Node | Sequence Node Node | Or Node Node |
+            {-abstract-}    Set (Map.Map Node Node) | Array [Node] | Table [{-Rows-}[Node]] |
             {-primitives-}  Path FilePath | NodeString T.Text {- | whether to preprocess this nodestring -} Bool
     deriving (Eq, Ord, Show)
+-}
 newtype Parser a = Parser {runParser :: T.Text -> Maybe (T.Text, a)}
 
 instance Functor Parser where
@@ -46,6 +48,19 @@ instance Monad Parser where
     runParser (f a) rest
 
 
+
+class Node' a where
+  parse :: Parser a
+  nodeLength :: a -> Int
+  nodeToText :: a -> T.Text
+
+data Node where
+  Node :: (Node' a,Typeable a) => a -> Node
+
+
+
+{-
+
 nodeToString :: Node -> T.Text
 nodeToString (NodeString s _) = s
 nodeToString (ProcessCall x xs) = nodeToString x <> T.concat (fmap nodeToString xs)
@@ -54,7 +69,7 @@ nodeToString x = traceShow x undefined
 nlength :: Node -> Int
 nlength (NodeString s _) = T.length s
 nlength (Path p) = length p
-nlength (Table t) = {- {} -} 2 + sum (fmap (uncurry (+) . join bimap nlength) $ Map.toList t)
+nlength (Set t) = {- {} -} 2 + sum (fmap (uncurry (+) . join bimap nlength) $ Map.toList t)
 nlength (Array a) = sum $ fmap nlength a
 nlength (ProcessCall p as) = nlength p + sum (fmap nlength as)
 nlength (And n1 n2) = nlength n1 + nlength n2 + 2 {- && -}
@@ -86,20 +101,28 @@ parseSeq, parseExpr, parseExpr', parseExpr'' :: Parser Node
 parseSeq = sequenceP <|> parseExpr
 parseExpr = andand <|> parseExpr'
 parseExpr' = pipe <|> parseExpr''
-parseExpr'' = jsontable <|> pcall
+parseExpr'' = jsonset <|> jsonarray <|> pcall
+
+csvtable :: Char -> Parser Node
+csvtable separator = Table <$> (ws *> body <* ws)
+  where
+    body = sepBy (charP '\n') $ row separator
+
+row :: Char -> Parser [Node]
+row separator = sepBy (charP separator) parseExpr
 
 
-jsontable :: Parser Node
-jsontable = Table <$> (ws *> charP '{' *> statements <* charP '}' <* ws)
+jsonarray :: Parser Node
+jsonarray = Array <$> (ws *> charP '{' *> body <* charP '}' <* ws)
+  where
+    body = sepBy (charP ',') parseExpr
+
+
+jsonset :: Parser Node
+jsonset = Set <$> (ws *> charP '{' *> statements <* charP '}' <* ws)
   where
     statements = Map.fromList <$> sepBy (charP ',') (statement ':')
 
-{-
-table :: Parser Node
-table = Table <$> (ws *> charP '{' *> statements <* charP '}' <* ws)
-  where
-    statements = Map.fromList <$> sepBy (charP ';') (statement '=')
--}
 statement :: Char -> Parser (Node, Node)
 statement sep = (,) <$> (ws *> shellWord <* ws <* charP sep) <*> (ws *> parseExpr <* ws)
 
@@ -107,9 +130,8 @@ statement sep = (,) <$> (ws *> shellWord <* ws <* charP sep) <*> (ws *> parseExp
 pcall :: Parser Node
 pcall = ProcessCall <$> (ws *> shellWord <* ws) <*> (many (ws *> shellWord <* ws))
 
-ws :: Parser T.Text
+ws, wsForce :: Parser T.Text
 ws = spanP isSpace
-
 wsForce = do
   s <- spanP isSpace
   if T.null s then empty else pure s
@@ -173,7 +195,7 @@ unwrapArgs (CompRule _ f) (t:ts) = f t >>= \case
 unwrapArgs _ [] = pure []
 -- todo: add completions and file cache to this
 isValidArgument :: [CompletionRule] -> [T.Text] -> IO Bool
-isValidArgument rules (executable:args') = case lookupRule executable rules of
+isValidArgument rules (execuset:args') = case lookupRule execuset rules of
   Just (CompRule x f) -> unwrapArgs (CompRule x f) args' <&> \case
     [CompRule x2 _] -> x2==last args'
     _   -> False
@@ -210,3 +232,5 @@ fileCompletionRec filtr = fileCompletion filtr (fileCompletionRec filtr)
 
 fileListCompletion :: (FilePath -> IO Bool) -> T.Text -> CompletionRule
 fileListCompletion filtr = (`CompRule` fileCompletionRec filtr)
+
+-}
