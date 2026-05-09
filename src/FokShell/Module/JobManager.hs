@@ -15,6 +15,9 @@ import FokShell.Module.Prompt (displayPrompt')
 import Lib.Primitive
 import FokShell.Module.Preprocessor.StringPreprocessors
 import System.Directory (getHomeDirectory)
+import FokShell.Module.Preprocessor (connectPreprocessors)
+import FokShell.Module.Parser
+import Data.Data (Proxy(Proxy))
 data JobManagerModule = JobManagerModule
   {
     jobs :: [Job]
@@ -24,7 +27,7 @@ data JobManagerModule = JobManagerModule
 instance Def JobManagerModule where
   def = JobManagerModule
     { jobs = []
-    , preprocessors = [combineStringPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]
+    , preprocessors = [connectPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]
     }
 
 instance Module' JobManagerModule ShellProcess where
@@ -35,9 +38,12 @@ instance Module' JobManagerModule ShellProcess where
           let conf = shellConfig p
           let input' = T.strip $ input conf
           let preprocess = connectPreprocessors tc.preprocessors
-          let task = runParser parseSeq input' <&> (>>= mkTask) . preprocess . snd
+          let parser = case requestModule (Proxy @ParserModule) conf.modules of
+                    (x:_) -> x
+                    _ -> def
+          let task = runParser parser.parser input' <&> (>>= makeTask) . preprocess . snd
           (job, p') <- case task of
-            Just t  -> t >>= \t -> do
+            Just t' -> t' >>= \t -> do
               mvar <- newEmptyMVar
               let job = Job t mvar
               p <- spawnJob (p {shellConfig = conf { input="", cursorLoc=0 }}) job

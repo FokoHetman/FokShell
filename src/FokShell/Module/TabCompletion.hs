@@ -18,7 +18,7 @@ import System.IO
 
 import Data.Functor
 import Data.Bool (bool)
-import Control.Monad (when)
+import Control.Monad (when, filterM)
 
 import Data.Proxy
 import Control.Arrow (Arrow(first))
@@ -26,8 +26,7 @@ import System.Directory (getDirectoryContents, getPermissions, Permissions (read
 import System.FilePath.Posix ((</>), takeDirectory)
 import Debug.Trace (traceShow)
 import Data.List (sort)
-
-
+import FokShell.Module.Parser
 
 
 data TabContextMode = Disabled | Selection deriving (Eq, Show)
@@ -39,6 +38,7 @@ data TabCompletion = TabCompletion
   , autocomplete    :: AutocompleteConfig
   , maxSuggestions  :: Int
   , shadowText      :: Bool
+  , completionRules :: [CompletionRule]
   }
 
 instance Def TabCompletion where
@@ -50,6 +50,7 @@ instance Def TabCompletion where
     , autocomplete = def
     , maxSuggestions = 10
     , shadowText = True
+    , completionRules = []
     }
 
 cleanPrevious :: T.Text -> IO ()
@@ -108,7 +109,7 @@ instance Module' TabCompletion ShellProcess where
                   Nothing -> Just 0
           displayCompletions (curWord p.shellConfig) (sort x) sel tc.maxSuggestions
           pure (False, (tc {mode = Selection, completions = x, selected = sel}, p))
-      _ -> model (tc.autocomplete) p >>= (\case
+      _ -> (tc.autocomplete.model) p tc >>= (\case
         [] -> pure (True, (tc {selected = Nothing},p))
         x -> do
           displayCompletions (curWord p.shellConfig) (sort x) Nothing tc.maxSuggestions
@@ -116,8 +117,11 @@ instance Module' TabCompletion ShellProcess where
         ) . fst
     where
       conf = p.shellConfig
-      curWord c = case runParser parseSeq c.input of
-        Just (_,n) -> (\(_,c',_,_) -> c') $ extractData' n c.input c.cursorLoc
+      parser = case requestModule (Proxy @ParserModule) conf.modules of
+        (x:_) -> x
+        _ -> def
+      curWord c = case runParser parser.parser c.input of
+        Just (_,n) -> (\(_,c',_) -> head c') $ getRawDataWrapped n c.input c.cursorLoc
         Nothing    -> ""
 
       replaceCurrentIO :: T.Text -> ShellProcess -> IO ShellProcess
@@ -136,11 +140,14 @@ instance Module' TabCompletion ShellProcess where
         right = T.reverse $ T.take i $ T.reverse t
         
         ninput =  left <> with <> right
-  postHook' tc p e = model (tc.autocomplete) p >>= \x -> (when (tc.mode == Selection) (cleanPrevious conf.input >> displayCompletions (curWord conf) (fst x) tc.selected tc.maxSuggestions) $> (True, (tc {completions = fst x}, p)))
+  postHook' tc p _ = tc.autocomplete.model p tc >>= \x -> (when (tc.mode == Selection) (cleanPrevious conf.input >> displayCompletions (curWord conf) (fst x) tc.selected tc.maxSuggestions) $> (True, (tc {completions = fst x}, p)))
     where
       conf = p.shellConfig
-      curWord c = case runParser parseSeq c.input of
-        Just (_,n) -> (\(_,c',_,_) -> c') $ extractData' n c.input c.cursorLoc
+      parser = case requestModule (Proxy @ParserModule) conf.modules of
+        (x:_) -> x
+        _ -> def
+      curWord c = case runParser parser.parser c.input of
+        Just (_,n) -> (\(_,c',_) -> head c') $ getRawDataWrapped n c.input c.cursorLoc
         Nothing    -> ""
   exitHook' tc p = pure (tc, p)
 {-moddata :: ShellProcess -> AutocompleteModelData
@@ -160,51 +167,38 @@ countMultiple w t
             | T.null t = 0
             | T.elem (T.head t) w = 1 + countMultiple w (T.tail t)
             | otherwise = countMultiple w $ T.tail t
-extractData :: Node -> Int -> (Node, T.Text, Int, [T.Text])
-extractData (NodeString n b) c = (NodeString n b, n, c, [])
-extractData (ProcessCall e args) c = (ProcessCall e args, l!!currentI, index, take currentI l)
-  where
-    l = fmap nodeToString $ e:args
-    (currentI, index) = findCurrent l c
-    findCurrent [_] c = (0, c)
-    findCurrent (x:xs) c = bool (0, c) (first (1 +) $ findCurrent xs ( c - T.length x)) (T.length x < c)
-extractData (Sequence left right) c = bool (extractData left c) (extractData right (c - nlength left - 1)) (c > nlength left)
-extractData (And left right) c = bool (extractData left c) (extractData right (c - nlength left - 2)) (c > nlength left)
-extractData (Pipe ps left right) c = bool (extractData left c) (extractData right (c - nlength left - pipelength ps)) (c > nlength left)
-extractData (Set t) c = f (c-1) $ Map.toList t
-  where
-    f _ [] = undefined
-    f i [(n1,n2)] = bool (extractData n1 i) (extractData n2 $ i - nlength n1 - 1) $ i<nlength n1
-    f i ((n1,n2):xs) = bool
-      (extractData n1 i)
-      (let i2 = i - nlength n1 - 1 in 
-          bool (extractData n2 i2) (f (i2 - nlength n2 - 1) xs) $ i2 > nlength n2)
-      (i > nlength n1)
-extractData' :: Node -> T.Text -> Int -> (Node, T.Text, Int, [T.Text])
-extractData' n t c = extractData n c'
+
+getRawDataWrapped :: Node -> T.Text -> Int -> (Node, [T.Text], Int)
+getRawDataWrapped n t c = getRawData n c'
   where
     leftInput = T.take (T.length t - c) t
     wsCount = countMultiple " '\"" leftInput
     c' = T.length t - c - wsCount
 
+
+
 languageModel :: AutocompleteModel
-languageModel proc@ShellProcess{shellConfig = conf} = case runParser parseSeq input of
+languageModel proc@ShellProcess{shellConfig = conf} tc = case runParser parser.parser input of
   Just (_,n) -> do
-    let (node, curArg, curInd, prevArgs) = extractData n cursor'
-    case node of
-      (ProcessCall e args) -> case prevArgs of
+    let (node, prevArgs, curInd) = getRawData n cursor'
+    let curArg = last prevArgs
+    case withProxyNode (Proxy @ProcessCall) node of
+      Just (ProcessCall e _) -> case prevArgs of
         [] -> case filter (T.isPrefixOf curArg) execs of
           [] -> pure ([],[])
           x  -> pure (x,[])
         (_exec:xs) -> do
-          let rule = lookupRule (nodeToString e) conf.completionRules
+          let rule = lookupRule (nodeToText e) tc.completionRules
           argMatches <- case rule of
             Just r -> fmap (\(CompRule e _) -> e) <$> nestNTimes r (xs ++ [curArg]) (length xs)
             Nothing -> fileMatches curArg
           pure (argMatches, [])
-      _ -> pure ([],[])
+      Nothing -> pure ([],[])
   Nothing -> pure ([],[])
   where
+    parser = case requestModule (Proxy @ParserModule) conf.modules of
+      (x:_) -> x
+      _ -> def
     input = conf.input
     loc = T.length input - conf.cursorLoc
     leftInput = T.take loc input
@@ -223,7 +217,7 @@ languageHook = undefined
 
 languageFullRedraw :: ShellProcess -> IO ()
 languageFullRedraw = undefined
-type AutocompleteModel = ShellProcess -> IO ([T.Text], [T.Text])
+type AutocompleteModel = ShellProcess -> TabCompletion -> IO ([T.Text], [T.Text])
 
 data AutocompleteConfig = AutocompleteConfig {
     model      :: AutocompleteModel
@@ -237,3 +231,55 @@ instance Def AutocompleteConfig where
   , redrawHook = languageHook
   , fullRedraw = languageFullRedraw
   }
+
+
+data CompletionRule = CompRule T.Text (T.Text -> IO [CompletionRule])
+
+instance Show CompletionRule where
+  show (CompRule x _) = "CompRule `" ++ T.unpack x ++ "`"
+
+unwrapArgs :: CompletionRule -> [T.Text] -> IO [CompletionRule]
+unwrapArgs (CompRule _ f) [t] = f t
+unwrapArgs (CompRule _ f) (t:ts) = f t >>= \case
+    [CompRule x f2] -> if x==t then unwrapArgs (CompRule x f2) ts else pure []
+    _ -> pure []
+unwrapArgs _ [] = pure []
+-- todo: add completions and file cache to this
+isValidArgument :: [CompletionRule] -> [T.Text] -> IO Bool
+isValidArgument rules (execuset:args') = case lookupRule execuset rules of
+  Just (CompRule x f) -> unwrapArgs (CompRule x f) args' <&> \case
+    [CompRule x2 _] -> x2==last args'
+    _   -> False
+  Nothing             -> pure True
+isValidArgument _ [] = pure True
+
+lookupRule :: T.Text -> [CompletionRule] -> Maybe CompletionRule
+lookupRule t (CompRule x f:xs) = bool (lookupRule t xs) (Just $ CompRule x f) (t==x)
+lookupRule _ [] = Nothing
+
+
+nestNTimes :: CompletionRule -> [T.Text] -> Int -> IO [CompletionRule]
+nestNTimes (CompRule _ f) (t:_) 0 = f t
+nestNTimes (CompRule _ f) (t:ts) n = f t >>= \case
+  [CompRule t2 f2] -> if t==t2 then nestNTimes (CompRule t2 f2) ts (n-1) else pure []
+  _ -> pure []
+nestNTimes _ [] _ = pure []
+
+
+
+fileCompletion :: (FilePath -> IO Bool) -> (T.Text -> IO [CompletionRule]) -> (T.Text -> IO [CompletionRule])
+fileCompletion filtre nest t = do
+    let d = takeDirectory $ T.unpack t
+    exists <- doesDirectoryExist d
+    if exists then getPermissions d >>= \x ->
+      if readable x then do
+        localFiles <- getDirectoryContents d >>= filterM (filtre . (d</>))
+        let matches = filter (T.isPrefixOf t) $ bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` t) <$> fmap T.pack localFiles
+        pure $ fmap (`CompRule` nest) matches
+      else pure []
+    else pure []
+fileCompletionRec :: (FilePath -> IO Bool) -> T.Text -> IO [CompletionRule]
+fileCompletionRec filtr = fileCompletion filtr (fileCompletionRec filtr)
+
+fileListCompletion :: (FilePath -> IO Bool) -> T.Text -> CompletionRule
+fileListCompletion filtr = (`CompRule` fileCompletionRec filtr)

@@ -67,6 +67,7 @@ library
                     , FokShell.Module.Cursor
                     , FokShell.Module.History
                     , FokShell.Module.JobManager
+                    , FokShell.Module.Parser
                     , FokShell.Module.Preprocessor
                     , FokShell.Module.Preprocessor.StringPreprocessors
                     , FokShell.Module.Prompt

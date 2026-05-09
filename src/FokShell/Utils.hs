@@ -60,7 +60,7 @@ moveCursor' c DLeft  i = when (T.length (input c) > cursorLoc c) (moveCursor DLe
 moveCursor' c DRight i = when (cursorLoc c > 0)  (moveCursor DRight i)
 moveCursor' _ _ _ = error "unsupported '-wrapped direction"
 
-
+{-
 mkTask' :: T.Text -> Maybe (IO Task)
 mkTask' t = runParser parseSeq t <&> mkTask . snd
 
@@ -113,7 +113,7 @@ mkTask (Set t) = do
   , condition = const True
   }
 mkTask x = error $ "unknown task: " <> show x
-
+-}
 
 modifyModule' :: forall a. (Module.Module' a ShellProcess,Typeable a) => Proxy a -> ShellProcess -> (a -> a) -> ShellProcess
 modifyModule' p proc f = proc {shellConfig = proc.shellConfig {modules = Module.modifyModule p proc.shellConfig.modules f}}
@@ -128,6 +128,6 @@ displaySet :: (Map.Map Node Node) -> IO ()
 displaySet t = T.putStrLn $ T.concat $ intersperse "\n" $ fmap display' $ Map.toList t
 
 display' :: (Node, Node) -> T.Text
-display' (n1, n2) = nodeToString n1 <> ": " <> nodeToString n2
+display' (n1, n2) = nodeToText n1 <> ": " <> nodeToText n2
 
 

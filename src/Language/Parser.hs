@@ -13,16 +13,58 @@ import System.FilePath
 import Control.Monad (filterM, join)
 import Debug.Trace (traceShow)
 import Data.Bifunctor (Bifunctor(bimap))
-import Data.Data (Typeable)
+import Data.Data (Typeable, Proxy, cast)
+import GHC.IO.Exception (ExitCode)
+import System.IO (IOMode)
+import GHC.IO.Handle
+import Control.Concurrent (MVar, readMVar, putMVar, isEmptyMVar)
+import Data.Maybe (isJust, fromJust)
 
-data StdMode = Stdout | Stderr deriving (Eq, Ord, Show)
-data PipeType = ProcessPipe | Write StdMode | Append StdMode | Read deriving (Eq, Ord, Show)
 
-{-data Node = {-operations-}  ProcessCall Node [Node] | And Node Node | Pipe PipeType Node Node | Sequence Node Node | Or Node Node |
-            {-abstract-}    Set (Map.Map Node Node) | Array [Node] | Table [{-Rows-}[Node]] |
-            {-primitives-}  Path FilePath | NodeString T.Text {- | whether to preprocess this nodestring -} Bool
-    deriving (Eq, Ord, Show)
--}
+data TaskPipeType = File FilePath IOMode | Terminal | ProcessData (MVar (Either Node Handle))
+
+data Task = Task {
+  procName    :: T.Text
+, procArgs    :: [T.Text]
+, pipeIn      :: TaskPipeType
+, pipeOut     :: TaskPipeType
+, pipeErr     :: TaskPipeType
+, prevTask    :: Maybe Task
+, condition   :: ExitCode -> Bool
+}
+
+class Node' a where
+  parse       :: Parser Node -> Parser a
+  nodeLen' :: a -> Int
+  nodeToText' :: a -> T.Text
+  modifyNode' :: a -> (Node -> Node) -> Node
+  makeTask'   :: a -> IO Task
+  getRawData' :: a -> Int -> ({- most primitive node the cursor is on -} Node, {- all strings before the cursor, including current one -}[T.Text], {- index into the current word -} Int)
+
+data Node where
+  Node :: (Node' a,Typeable a) => a -> Node
+
+makeTask :: Node -> IO Task
+makeTask (Node a) = makeTask' a
+
+nodeLen :: Node -> Int
+nodeLen (Node a) = nodeLen' a
+nodeToText :: Node -> T.Text
+nodeToText (Node a) = nodeToText' a
+
+modifyNode :: Node -> (Node -> Node) -> Node
+modifyNode (Node a) = modifyNode' a
+
+getRawData :: Node -> Int -> (Node, [T.Text], Int)
+getRawData (Node a) = getRawData' a
+
+
+withProxyNode :: forall i. Typeable i => Proxy i -> Node -> Maybe i
+withProxyNode _ (Node a) = cast a
+requestNode :: forall a. (Node' a,Typeable a) => Proxy a -> [Node] -> [a]
+requestNode p xs = fmap fromJust $ filter isJust $ fmap (withProxyNode p) xs
+
+
 newtype Parser a = Parser {runParser :: T.Text -> Maybe (T.Text, a)}
 
 instance Functor Parser where
@@ -48,19 +90,133 @@ instance Monad Parser where
     runParser (f a) rest
 
 
+-- Chain {{{
+data ChainType = Sequence | OnSuccess | OnFailure
+chainLen :: ChainType -> Int
+chainLen Sequence = 1
+chainLen OnSuccess = 2
+chainLen OnFailure = 2
+data ChainExp = ChainExp ChainType Node Node
 
-class Node' a where
-  parse :: Parser a
-  nodeLength :: a -> Int
-  nodeToText :: a -> T.Text
+instance Node' ChainExp where
+  parse = chainParser
+  nodeLen' (ChainExp t left right) = nodeLen left + nodeLen right + chainLen t
+  nodeToText' = undefined
+  modifyNode' (ChainExp t left right) f = f (Node $ ChainExp t (modifyNode left f) $ modifyNode right f)
 
-data Node where
-  Node :: (Node' a,Typeable a) => a -> Node
+chainParser :: Parser Node -> Parser ChainExp
+chainParser lower = f Sequence (stringP ";") <|> f OnSuccess (stringP "&&") <|> f OnFailure (stringP "||")
+  where
+    f sx ssx = ChainExp sx <$> (lower <* ssx) <*> (Node <$> pipelineParser lower)
+-- }}}
 
+-- Pipeline {{{
+data StdMode = Stdout | Stderr deriving (Eq, Ord, Show)
+data Pipeline = Pipe | Write StdMode | Append StdMode | Read deriving (Eq, Ord, Show)
+pipelineLen :: Pipeline -> Int
+pipelineLen x
+      | elem x [Pipe, Write Stdout, Read] = 1
+      | elem x [Write Stderr, Append Stdout] = 2
+      | elem x [Append Stderr] = 3
+      | otherwise = traceShow "0: shouldn't happen" 0
+
+data PipelineExp = PipelineExp Pipeline Node Node
+
+instance Node' PipelineExp where
+  parse = pipelineParser
+  nodeLen' (PipelineExp pline left right) = nodeLen left + nodeLen right + pipelineLen pline
+  nodeToText' = undefined
+  modifyNode' (PipelineExp pline left right) f = f (Node $ PipelineExp pline (modifyNode left f) $ modifyNode right f)
+
+pipelineParser :: Parser Node -> Parser PipelineExp
+pipelineParser lower = f (Append Stdout) (stringP ">>")
+      <|> f (Write Stderr) (stringP ">2")
+      <|> f (Append Stderr) (stringP ">>2")
+      <|> f (Write Stdout) (stringP ">")
+      <|> f Read (stringP "<")
+      <|> f Pipe (stringP "|")
+  where
+    f sx ssx = PipelineExp sx <$> (lower <* ssx) <*> (Node <$> pipelineParser lower)
+-- }}}
+
+-- ProcessCall {{{
+data ProcessCall = ProcessCall Node [Node]
+
+instance Node' ProcessCall where
+  parse  = pcallParser
+  nodeLen' (ProcessCall n ns) = nodeLen n + sum (fmap nodeLen ns)
+  nodeToText' _ = undefined
+  modifyNode' (ProcessCall n ns) f = f (Node $ ProcessCall (modifyNode n f) $ fmap (`modifyNode` f) ns)
+
+pcallParser :: Parser Node -> Parser ProcessCall
+pcallParser lower = ProcessCall <$> (ws *> lower <* ws) <*> (many (ws *> lower <* ws))
+-- }}}
+
+-- Primitive {{{
+data QuoteType = None | SingleQuote | DoubleQuote
+data Primitive = NodeString T.Text QuoteType
+
+instance Node' Primitive where
+  parse _ = nodestringParser
+  nodeLen' (NodeString t None) = T.length t
+  nodeLen' (NodeString t _) = T.length t + 2
+  nodeToText' (NodeString t _) = t
+  modifyNode' n f = f (Node n)
+
+nodestringParser :: Parser Primitive
+nodestringParser = uncurry NodeString <$> nodestringP
+
+bare, singleQuoted, doubleQuoted, nodestringP :: Parser (T.Text,QuoteType)
+bare = (,None) <$> spanPForce (not . isSpecial)
+singleQuoted = (,SingleQuote) <$> (charP '\'' *> spanP (/='\'') <* charP '\'')
+doubleQuoted = (,DoubleQuote) <$> (charP '"' *> spanP (/='\"') <* charP '"')
+nodestringP = singleQuoted <|> doubleQuoted <|> bare
+
+-- }}}
+
+ws, wsForce :: Parser T.Text
+ws = spanP isSpace
+wsForce = do
+  s <- spanP isSpace
+  if T.null s then empty else pure s
+
+item :: Parser Char
+item = Parser $ \t -> swap <$> T.uncons t
+
+satisfy :: (Char -> Bool) -> Parser Char
+satisfy p = do
+  c <- item
+  if p c then pure c else empty
+
+charP :: Char -> Parser Char
+charP c = satisfy (==c)
+
+specialChars :: String
+specialChars = "=:;{}<|>,!#&\\\"' "
+
+isSpecial :: Char -> Bool
+isSpecial = (`elem` specialChars)
+
+
+stringP :: String -> Parser String
+stringP = traverse charP
+
+spanP, spanPForce :: (Char -> Bool) -> Parser T.Text
+spanP f = Parser $ \input ->
+  let (token, rest) = T.span f input
+  in Just (rest, token)
+
+spanPForce f = do
+  res <- spanP f
+  bool (pure res) empty (T.null res)
+
+sepBy :: Parser a
+      -> Parser b
+      -> Parser [b]
+sepBy sep element = (:) <$> element <*> many (sep *> element) <|> pure []
 
 
 {-
-
 nodeToString :: Node -> T.Text
 nodeToString (NodeString s _) = s
 nodeToString (ProcessCall x xs) = nodeToString x <> T.concat (fmap nodeToString xs)
@@ -234,3 +390,5 @@ fileListCompletion :: (FilePath -> IO Bool) -> T.Text -> CompletionRule
 fileListCompletion filtr = (`CompRule` fileCompletionRec filtr)
 
 -}
+
+-- vim: foldmethod=marker

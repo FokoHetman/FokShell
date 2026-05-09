@@ -138,7 +138,7 @@ main = fokshell $ def
         }
       , Module JobManagerModule 
         { jobs = []
-        , preprocessors = [combineStringPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]
+        , preprocessors = [connectPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]
         }
       , Module myPrompt
       , Module $ historyFile (withHomeDir ".config/fokshell/history") 10000

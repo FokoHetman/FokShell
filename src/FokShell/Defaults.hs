@@ -12,7 +12,7 @@ import FokShell.Module.JobManager
 import FokShell.Module.TabCompletion
 import FokShell.Module.Prompt
 import System.Directory (getHomeDirectory)
-import FokShell.Module.Preprocessor.StringPreprocessors (combineStringPreprocessors, substituter, envVarPreprocessor)
+import FokShell.Module.Preprocessor.StringPreprocessors (substituter, envVarPreprocessor)
 import Data.List (sort)
 import FokShell.Module.History (withHomeDir, historyFile, HistoryModule)
 import System.Exit (exitSuccess)
@@ -22,6 +22,7 @@ import FokShell.Builtin
 import FokShell.Module qualified as Module
 import GHC.IO.Handle (hFlush)
 import System.IO (stdout)
+import FokShell.Module.Parser (ParserModule)
 
 instance Def [Module ShellProcess] where
   def =
@@ -29,6 +30,7 @@ instance Def [Module ShellProcess] where
     , Module (def :: TabCompletion)
     , Module (def :: HistoryModule)
     , Module (def :: JobManagerModule)
+    , Module (def :: ParserModule)
     ]
 
 instance Def [CompletionRule] where
@@ -39,12 +41,12 @@ instance Def [CompletionRule] where
     ]
 
 instance Def [Builtin] where
-  def = [
+  def = [{-
       cd
     , bmap
     , regex
     , set
-    ]
+    -}]
 
 
 
@@ -73,7 +75,6 @@ instance Def ShellConfig where
     , lastEvent = (KeyModifiers 0, Escape)
     , trigger = (KeyModifiers 0, Escape)
     , builtins = def
-    , completionRules = def
     , modules = def
     }
 

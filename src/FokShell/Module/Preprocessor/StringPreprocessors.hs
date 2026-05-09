@@ -12,26 +12,15 @@ import Debug.Trace (trace)
 import System.Environment.Blank (getEnv)
 import Data.Functor ((<&>))
 import Control.Applicative
-combineStringPreprocessors :: [Preprocessor] -> Preprocessor
-combineStringPreprocessors pp n@(NodeString _ True) = connectPreprocessors pp n
-combineStringPreprocessors _  n@(NodeString _ False) = pure n
-combineStringPreprocessors pp n@(Path _) = connectPreprocessors pp n
-combineStringPreprocessors pp (Set t) = Set . M.fromList <$> mapM (\(x,y) -> do
-      y' <- combineStringPreprocessors pp y
-      pure (x,y')
-    ) (M.toList t)
-combineStringPreprocessors pp (Array a) = Array <$> mapM (combineStringPreprocessors pp) a
-combineStringPreprocessors pp (ProcessCall name args) = ProcessCall <$> combineStringPreprocessors pp name <*> mapM (combineStringPreprocessors pp) args
-combineStringPreprocessors pp (And left right) = And <$> combineStringPreprocessors pp left <*> combineStringPreprocessors pp right
-combineStringPreprocessors pp (Sequence left right) = Sequence <$> combineStringPreprocessors pp left <*> combineStringPreprocessors pp right
-combineStringPreprocessors pp (Or left right) = Or <$> combineStringPreprocessors pp left <*> combineStringPreprocessors pp right
-combineStringPreprocessors pp (Pipe ps left right) = Pipe ps <$> combineStringPreprocessors pp left <*> combineStringPreprocessors pp right
+import Data.Data (Proxy(Proxy))
 
 substituter :: T.Text -> IO T.Text -> Int -> Preprocessor
-substituter pat with times (NodeString s True) = do
+substituter pat with times node = do
   with' <- with
-  pure $ (`NodeString` True) $ replaceN times pat with' s
-substituter _ _ _ _ = undefined
+  case withProxyNode (Proxy @Primitive) node of
+    Just (NodeString _ SingleQuote) -> pure node
+    Just (NodeString t q) -> pure $ Node $ NodeString (replaceN times pat with' t) q
+    _ -> pure node
 
 replaceN :: Int -> T.Text -> T.Text -> T.Text -> T.Text
 replaceN 0 _ _ t = t
@@ -44,10 +33,12 @@ replaceN x pat with input = bool (error "negative number of replaces in replaceN
 
 
 envVarPreprocessor :: Preprocessor
-envVarPreprocessor (NodeString s True) = case runParser (many substringParser) s of
-    Just (leftover, xs) -> (`NodeString` True) . (<>leftover) . T.concat <$> sequence xs
-    Nothing -> pure $ NodeString s True
-envVarPreprocessor _ = undefined
+envVarPreprocessor node = case withProxyNode (Proxy @Primitive) node of
+  Just (NodeString _ SingleQuote) -> pure node
+  Just (NodeString s q) -> case runParser (many substringParser) s of
+      Just (leftover, xs) -> Node . (`NodeString` q) . (<>leftover) . T.concat <$> sequence xs
+      Nothing -> pure . Node $ NodeString s q
+  _ -> pure node
 substringParser :: Parser (IO T.Text)
 substringParser  = envvarParser <|> (pure <$> basicParser)
 

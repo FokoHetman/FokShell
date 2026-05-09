@@ -15,8 +15,9 @@ import Control.Concurrent
 import Data.Functor
 import Text.Regex.TDFA
 import Data.Map qualified as Map
+import FokShell.Module.TabCompletion
 
-
+{-
 -- builtins {{{
 set, cd, bmap, regex :: Builtin
 set = ("set", set')
@@ -120,7 +121,7 @@ regex' args (inh, outh, errh) process = case inh of
       pure (ExitFailure $ -1, process)
 
 -- }}}
-
+-}
 -- completions {{{
 {-nix :: CompletionRule
 nix = CompRule "nix" (\t -> pure $ filter (\(CompRule i _) -> t `T.isPrefixOf` i) [

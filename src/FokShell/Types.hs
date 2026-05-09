@@ -21,18 +21,6 @@ import FokShell.Module qualified as Module
 import Control.Exception (catch)
 import System.IO.Error (ioeGetErrorType, ioeGetErrorString, ioeGetFileName)
 
-data TaskPipeType = File FilePath IOMode | Terminal | ProcessData (MVar (Either Node Handle))
-
-data Task = Task {
-  procName    :: T.Text
-, procArgs    :: [T.Text]
-, pipeIn      :: TaskPipeType
-, pipeOut     :: TaskPipeType
-, pipeErr     :: TaskPipeType
-, prevTask    :: Maybe Task
-, condition   :: ExitCode -> Bool
-}
-
 data Process = Process {
   pid       :: Pid
 , procHandle:: ProcessHandle
@@ -106,7 +94,7 @@ executeTask proc' t = do
         case t.pipeIn of
           ProcessData ref -> readMVar ref >>= \case
               Left n -> case inh of
-                Just inh' -> hPutStr inh' (T.unpack $ nodeToString n) >> hFlush inh' >> hClose inh'
+                Just inh' -> hPutStr inh' (T.unpack $ nodeToText n) >> hFlush inh' >> hClose inh'
                 Nothing -> pure ()
               _ -> pure ()
           _ -> pure ()
@@ -144,7 +132,7 @@ data ShellConfig = ShellConfig
   , lastEvent   :: KeyEvent
   , trigger     :: KeyEvent             -- this should never be overriden globally, locally it should be overwritten with the keyevent trigger (example at ^L handling)
   , builtins    :: [Builtin]
-  , completionRules :: [CompletionRule]
+  --, completionRules :: [CompletionRule]
   , modules :: [Module.Module ShellProcess]
   }
 

@@ -26,7 +26,7 @@ import FokShell.Types
 import Data.Dynamic (fromDynamic)
 import Data.Maybe (fromMaybe)
 import Data.Bool (bool)
-import Language.Parser (Parser(runParser), parseExpr, parseSeq)
+import Language.Parser (Parser(runParser))
 --import Language.Autocomplete
 import Debug.Trace (traceShow)
 import FokShell.Module (chainHook, initHook, postHook, preHook, chainEventHook)
