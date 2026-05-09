@@ -127,12 +127,8 @@ main = fokshell $ def
         { colorschemes = colorSchemes
         , current = 0
         }
-      , Module TabCompletion
-        { mode = Disabled
-        , selected = Nothing
-        , completions = []
-        , autocomplete = def
-        , maxSuggestions = 10
+      , Module (def :: TabCompletion)
+        { maxSuggestions = 10
         , shadowText = True
         , sortAlgorithm = const sort
         }

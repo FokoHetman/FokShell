@@ -12,12 +12,12 @@ import System.Directory
 import System.FilePath
 import Control.Monad (filterM, join)
 import Debug.Trace (traceShow)
-import Data.Bifunctor (Bifunctor(bimap))
+import Data.Bifunctor (Bifunctor(bimap, first))
 import Data.Data (Typeable, Proxy, cast)
-import GHC.IO.Exception (ExitCode)
-import System.IO (IOMode)
+import GHC.IO.Exception (ExitCode (ExitSuccess))
+import System.IO (IOMode (WriteMode, AppendMode))
 import GHC.IO.Handle
-import Control.Concurrent (MVar, readMVar, putMVar, isEmptyMVar)
+import Control.Concurrent (MVar, readMVar, putMVar, isEmptyMVar, newEmptyMVar)
 import Data.Maybe (isJust, fromJust)
 
 
@@ -103,11 +103,23 @@ instance Node' ChainExp where
   nodeLen' (ChainExp t left right) = nodeLen left + nodeLen right + chainLen t
   nodeToText' = undefined
   modifyNode' (ChainExp t left right) f = f (Node $ ChainExp t (modifyNode left f) $ modifyNode right f)
+  makeTask' (ChainExp t left right) = do
+    n2' <- makeTask right
+    n1' <- makeTask left
+    pure n2'
+     {prevTask = Just n1'
+    , condition = case t of
+      OnSuccess -> (==ExitSuccess)
+      OnFailure -> (/=ExitSuccess)
+      Sequence -> const True
+    }
+  getRawData' (ChainExp t left right) c = bool (getRawData left c) (getRawData right (c - nodeLen left - chainLen t)) (c > nodeLen left)
 
 chainParser :: Parser Node -> Parser ChainExp
-chainParser lower = f Sequence (stringP ";") <|> f OnSuccess (stringP "&&") <|> f OnFailure (stringP "||")
+chainParser lower = f Sequence (charP ';') <|> f OnSuccess (stringP "&&") <|> f OnFailure (stringP "||")
   where
-    f sx ssx = ChainExp sx <$> (lower <* ssx) <*> (Node <$> pipelineParser lower)
+    f :: ChainType -> Parser a -> Parser ChainExp
+    f sx ssx = ChainExp sx <$> (lower <* ssx) <*> (Node <$> chainParser lower <|> lower)
 -- }}}
 
 -- Pipeline {{{
@@ -127,16 +139,36 @@ instance Node' PipelineExp where
   nodeLen' (PipelineExp pline left right) = nodeLen left + nodeLen right + pipelineLen pline
   nodeToText' = undefined
   modifyNode' (PipelineExp pline left right) f = f (Node $ PipelineExp pline (modifyNode left f) $ modifyNode right f)
+  makeTask' (PipelineExp pline n1 n2) = case pline of
+    Pipe -> do
+      n2' <- makeTask n2
+      n1' <- makeTask n1
+      ref2 <- newEmptyMVar
+      pure n2' {pipeIn = ProcessData ref2, prevTask = Just $ n1' {pipeOut = ProcessData ref2}}
+    Write Stdout -> mkFilePipe n1 n2 Stdout WriteMode
+    Write Stderr -> mkFilePipe n1 n2 Stderr WriteMode
+    Append Stdout -> mkFilePipe n1 n2 Stdout AppendMode
+    Append Stderr -> mkFilePipe n1 n2 Stderr AppendMode
+    Read -> undefined
+    where
+    mkFilePipe n1 n2 Stdout mode = do
+      n1' <- makeTask n1
+      pure n1' {pipeOut = File (T.unpack $ nodeToText n2) mode}
+    mkFilePipe n1 n2 Stderr mode = do
+      n1' <- makeTask n1
+      pure n1' {pipeErr = File (T.unpack $ nodeToText n2) mode}
+  getRawData' (PipelineExp pline left right) c = bool (getRawData left c) (getRawData right (c - nodeLen left - pipelineLen pline)) (c > nodeLen left)
 
 pipelineParser :: Parser Node -> Parser PipelineExp
 pipelineParser lower = f (Append Stdout) (stringP ">>")
       <|> f (Write Stderr) (stringP ">2")
       <|> f (Append Stderr) (stringP ">>2")
-      <|> f (Write Stdout) (stringP ">")
-      <|> f Read (stringP "<")
-      <|> f Pipe (stringP "|")
+      <|> f (Write Stdout) (charP '>')
+      <|> f Read (charP '<')
+      <|> f Pipe (charP '|')
   where
-    f sx ssx = PipelineExp sx <$> (lower <* ssx) <*> (Node <$> pipelineParser lower)
+    f :: Pipeline -> Parser a -> Parser PipelineExp
+    f sx ssx = PipelineExp sx <$> (lower <* ssx) <*> (Node <$> pipelineParser lower <|> lower)
 -- }}}
 
 -- ProcessCall {{{
@@ -147,14 +179,30 @@ instance Node' ProcessCall where
   nodeLen' (ProcessCall n ns) = nodeLen n + sum (fmap nodeLen ns)
   nodeToText' _ = undefined
   modifyNode' (ProcessCall n ns) f = f (Node $ ProcessCall (modifyNode n f) $ fmap (`modifyNode` f) ns)
+  makeTask' (ProcessCall e args) = pure Task 
+    { procName = nodeToText e
+    , procArgs = fmap nodeToText args
+    , pipeIn = Terminal
+    , pipeOut = Terminal
+    , pipeErr = Terminal
+    , prevTask = Nothing
+    -- | given exit code of prevTask determines whether this task should run
+    , condition = const True
+    }
+  getRawData' (ProcessCall e args) c = (Node (ProcessCall e args), l, index)
+    where
+      l = fmap nodeToText $ e:args
+      (currentI, index) = findCurrent l c
+      findCurrent [_] c = (0, c)
+      findCurrent (x:xs) c = bool (0, c) (first (1 +) $ findCurrent xs ( c - T.length x)) (T.length x < c)
 
 pcallParser :: Parser Node -> Parser ProcessCall
 pcallParser lower = ProcessCall <$> (ws *> lower <* ws) <*> (many (ws *> lower <* ws))
 -- }}}
 
 -- Primitive {{{
-data QuoteType = None | SingleQuote | DoubleQuote
-data Primitive = NodeString T.Text QuoteType
+data QuoteType = None | SingleQuote | DoubleQuote deriving (Eq,Show)
+data Primitive = NodeString T.Text QuoteType deriving Show
 
 instance Node' Primitive where
   parse _ = nodestringParser
@@ -162,6 +210,8 @@ instance Node' Primitive where
   nodeLen' (NodeString t _) = T.length t + 2
   nodeToText' (NodeString t _) = t
   modifyNode' n f = f (Node n)
+  makeTask' _ = error "don't"
+  getRawData' (NodeString t q) c = (Node $ NodeString t q, [t], bool (c-1) c $ q==None)
 
 nodestringParser :: Parser Primitive
 nodestringParser = uncurry NodeString <$> nodestringP
