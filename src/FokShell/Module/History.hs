@@ -66,7 +66,7 @@ instance Module' HistoryModule ShellProcess where
     history <- tc.getHistory
     pure (tc {history = history}, p {shellConfig = p.shellConfig {builtins = bool id (historyBuiltin:) tc.addBuiltins $ p.shellConfig.builtins}})
   exitHook' tc p = tc.writeHistory (take tc.entryLimit tc.history) >> pure (tc,p)
-  resetHook' tc p = pure (tc, p)
+  resetHook' tc p = pure (tc {historyIndex = Nothing}, p)
   preHook' tc p (KeyModifiers 0, Enter) = pure (True,(tc {history=tc.appendToHistory p.shellConfig.input tc.history, historyIndex = Nothing},p))
   preHook' tc p (KeyModifiers 0, Arrow Up) = when (T.length (input conf) - cursorLoc conf > 0 ) (moveCursor' conf DLeft (T.length (input conf) - cursorLoc conf)) >> 
             (\(tc', conf') ->  redrawFromCursor conf' {cursorLoc = T.length $ conf'.input} >>  moveCursor' conf' {cursorLoc = T.length $ conf'.input} DRight (T.length $ conf'.input) $> (True, (tc',p {shellConfig = conf' {cursorLoc = 0}})))
