@@ -9,24 +9,32 @@ import Data.Proxy
 import Data.Typeable
 
 class Module' a proc where
+  -- | hook called upon shell's startup
   initHook'    :: a -> proc -> IO (a, proc)
-  preHook'     :: a -> proc -> KeyEvent -> IO (Bool, (a, proc))
-  postHook'    :: a -> proc -> KeyEvent -> IO (Bool, (a, proc))
+  -- | hook called upon shell exit
   exitHook'    :: a -> proc -> IO (a, proc)
+  -- | hook called in eg. haltHook, used to restore the default state of the Module
+  resetHook'   :: a -> proc -> IO (a, proc)
+  -- | hook called before default processing of keyevents
+  preHook'     :: a -> proc -> KeyEvent -> IO (Bool, (a, proc))
+  -- | hook called after default processing of keyevents
+  postHook'    :: a -> proc -> KeyEvent -> IO (Bool, (a, proc))
 
 data Module p where
   Module :: (Module' a p,Typeable a) => a -> Module p
 
 initHook :: Module p -> p -> IO (Module p, p)
 initHook (Module a) p = first Module <$> initHook' a p
+exitHook :: Module p -> p -> IO (Module p, p)
+exitHook (Module a) p = first Module <$> exitHook' a p
+
+resetHook :: Module p -> p -> IO (Module p, p)
+resetHook (Module a) p = first Module <$> resetHook' a p
 
 preHook :: Module p -> p -> KeyEvent -> IO (Bool, (Module p, p))
 preHook (Module a) p e = second (first Module) <$> preHook' a p e
 postHook :: Module p -> p -> KeyEvent -> IO (Bool, (Module p, p))
 postHook (Module a) p e = second (first Module) <$> postHook' a p e
-
-exitHook :: Module p -> p -> IO (Module p, p)
-exitHook (Module a) p = first Module <$> exitHook' a p
 
 chainHook :: [Module p] -> p -> (Module p -> p -> IO (Module p, p)) -> IO ([Module p], p)
 chainHook [] p _ = pure ([], p)

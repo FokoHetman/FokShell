@@ -32,6 +32,8 @@ instance Def JobManagerModule where
 
 instance Module' JobManagerModule ShellProcess where
   initHook' tc p = pure (tc,p)
+  exitHook' tc p = pure (tc, p)
+  resetHook' tc p = pure (tc, p)
   preHook' tc p e = case e of
     (KeyModifiers 0, Enter) -> do
           putStrLn ""
@@ -56,4 +58,3 @@ instance Module' JobManagerModule ShellProcess where
             Nothing -> pure (False, (tc, p'))
     _ -> pure (True, (tc, p))
   postHook' tc p e = pure (True,(tc,p))
-  exitHook' tc p = pure (tc, p)

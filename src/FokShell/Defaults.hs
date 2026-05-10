@@ -41,17 +41,17 @@ instance Def [CompletionRule] where
     ]
 
 instance Def [Builtin] where
-  def = [{-
+  def = [
       cd
-    , bmap
     , regex
-    , set
-    -}]
+    ]
 
 
 
 haltAction :: Action
-haltAction proc = putStrLn "^C" >> displayPrompt' proc $> proc {shellConfig = proc.shellConfig {input = "",cursorLoc=0}}
+haltAction proc = do
+  (modules, p) <- chainHook proc.shellConfig.modules proc resetHook
+  putStrLn "^C" >> displayPrompt' proc $> p {shellConfig = p.shellConfig {input = "",cursorLoc=0, modules=modules}}
 
 exitAction :: Action
 exitAction p = Module.chainHook p.shellConfig.modules p Module.exitHook >> exitSuccess

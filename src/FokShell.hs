@@ -143,46 +143,8 @@ parseEvent proc' key = do
           (x:_) -> snd x proc
           _ -> pure proc
   (b', (modules, p)) <- chainEventHook out.shellConfig.modules out postHook key
-  --bool (autocompleteRedraw out) (pure ()) (colorScheme (shellConfig out) == colorScheme conf)
-  --bool (autocompleteOverrides out) (pure ()) (input (shellConfig out) == input conf)
-  --autocompleteOverrides out
   pure $ updateWithKey key p {shellConfig = p.shellConfig {modules = modules}}
     where
-    {-moddata :: ShellProcess -> AutocompleteModelData
-    moddata p = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c, 
-              historyL = history c, executableList = executablelist' p, builtinNames = fmap fst (builtins c), 
-              modelOutput = ([],[]), mCompletionRules = completionRules c}
-              where
-              c = p.shellConfig-}
-
-    {-curWord c = case runParser parseSeq c.input of
-      Just (_,n) -> (\(_,c',_,_) -> c') $ extractData' n c.input c.cursorLoc
-      Nothing    -> ""
-    curWordI c = case runParser parseSeq c.input of
-      Just (_,n) -> (\(_,_,c',_) -> c') $ extractData' n c.input c.cursorLoc
-      Nothing    -> 0-}
-    {-getIndexes c = extract' (input c) (cursorLoc c)
-    cursorIndex c = snd $ getIndexes c
-    matchIndex c = fst $ getIndexes c
-    curWord c = fromMaybe "" $ case runParser parseExpr (input c) of
-      Just (_, n) -> case extract n (T.length (input c) - cursorLoc c) of
-        Just (i,cursor') -> Just $ trackword (track n i) cursor'
-        Nothing -> Nothing
-      Nothing -> Nothing
-    --curWord c = maybe "" (reverse (T.words $ input c)!!) (matchIndex c)
-    -}
-    {-replaceCurrent :: T.Text -> ShellConfig -> ShellConfig
-    replaceCurrent with c = c {input = ninput}
-      where
-        t = input c
-        i = cursorLoc c
-        curword = curWord c
-
-        left = T.take (T.length t - T.length curword - i) t
-        right = T.reverse $ T.take i $ T.reverse t
-        
-        ninput =  left <> with <> right-}
-
     addToInput c t = c {input = T.concat [left, t, right]}
       where
         loc = cursorLoc c 
@@ -192,6 +154,4 @@ parseEvent proc' key = do
     
     executablelist' :: ShellProcess -> [T.Text]
     executablelist' p = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache p) "executables" >>= \x -> lookupCache x "execs")
-
-    --autocompleteOverrides proc' = let c = shellConfig proc' in model (autocomplete c) (moddata c) >>= \x -> redrawHook (autocomplete c) $ (moddata c) {modelOutput = x}
 

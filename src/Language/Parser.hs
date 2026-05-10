@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase, GADTs #-}
+{-# LANGUAGE LambdaCase, GADTs, OverloadedStrings #-}
 module Language.Parser where
 
 import Data.Map qualified as Map
@@ -20,6 +20,7 @@ import GHC.IO.Handle
 import Control.Concurrent (MVar, readMVar, putMVar, isEmptyMVar, newEmptyMVar)
 import Data.Maybe (isJust, fromJust)
 
+import Data.Map qualified as Map
 
 data TaskPipeType = File FilePath IOMode | Terminal | ProcessData (MVar (Either Node Handle))
 
@@ -198,6 +199,30 @@ instance Node' ProcessCall where
 
 pcallParser :: Parser Node -> Parser ProcessCall
 pcallParser lower = ProcessCall <$> (ws *> lower <* ws) <*> (many (ws *> lower <* ws))
+-- }}}
+
+-- Array {{{
+data ArrayExp = ArrayExp [Node]
+instance Node' ArrayExp where
+  parse = parseArray
+  nodeLen' (ArrayExp n) = sum (fmap nodeLen n) + 1 {-2 (brackets) - 1 (comma)-} + length n
+  nodeToText' (ArrayExp n) = "{" <> T.intercalate "," (fmap nodeToText n) <> "}"
+  modifyNode' (ArrayExp n) f = f $ Node $ ArrayExp $ f <$> n
+  makeTask' (ArrayExp n) = undefined
+  getRawData' (ArrayExp ns) c = f (c-1) $ ns
+    where
+    f :: Int -> [Node] -> (Node, [T.Text], Int)
+    f _ [] = undefined
+    f i [n] = (getRawData n i)
+    f i (n:xs) = bool
+      (getRawData n i)
+      (f (i-nodeLen n - 1) xs)
+      (i > nodeLen n)
+
+parseArray :: Parser Node -> Parser ArrayExp
+parseArray lower = ArrayExp <$> (charP '{' *> body <* charP '}')
+  where
+    body = sepBy (charP ',') lower
 -- }}}
 
 -- Primitive {{{

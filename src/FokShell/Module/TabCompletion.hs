@@ -22,11 +22,12 @@ import Control.Monad (when, filterM)
 
 import Data.Proxy
 import Control.Arrow (Arrow(first))
-import System.Directory (getDirectoryContents, getPermissions, Permissions (readable), doesDirectoryExist)
+import System.Directory (getDirectoryContents, getPermissions, Permissions (readable), doesDirectoryExist, pathIsSymbolicLink)
 import System.FilePath.Posix ((</>), takeDirectory)
 import Debug.Trace (traceShow)
 import Data.List (sort)
 import FokShell.Module.Parser
+import System.Posix (isDirectory, getFileStatus)
 
 
 data TabContextMode = Disabled | Selection deriving (Eq, Show)
@@ -55,6 +56,12 @@ instance Def TabCompletion where
 
 cleanPrevious :: T.Text -> IO ()
 cleanPrevious inp = T.putStr (moveCursorRaw DRight (T.length inp) <> "\ESC[0J" <> moveCursorRaw DLeft (T.length inp)) >> hFlush stdout
+
+getCommonPrefix :: [T.Text] -> T.Text
+getCommonPrefix [] = undefined
+getCommonPrefix [x] = x
+getCommonPrefix (x:y:xs) = getCommonPrefix $ new:xs
+  where new = T.pack $ fmap (\(x,_) -> x) $ filter (\(x,y) -> x==y) $ T.zip x y
 
 displayCompletions :: T.Text -> [T.Text] -> Maybe Int -> Int -> IO ()
 displayCompletions _ [] _ _ = pure ()
@@ -87,14 +94,17 @@ displayCompletions current (x:xs) selected displayed = do
 
 instance Module' TabCompletion ShellProcess where
   initHook' tc p = pure (tc, p)
+  exitHook' tc p = pure (tc, p)
+  resetHook' tc p = cleanPrevious p.shellConfig.input >> pure (tc {mode = Disabled, selected=Nothing}, p)
   preHook' tc p e = case tc.mode of
     Disabled -> case e of
       (KeyModifiers 0, Tab) -> case tc.completions of
         [] -> pure (True, (tc,p))
         [x] -> (False,) . (tc,) <$> replaceCurrentIO x p
         x -> do
-          displayCompletions (curWord p.shellConfig) (sort x) tc.selected tc.maxSuggestions
-          pure (False, (tc {mode = Selection, completions = x, selected = Just 0 {- len is at least 2 -}}, p))
+          let common = getCommonPrefix x
+          displayCompletions (curWord p.shellConfig) (tc.sortAlgorithm p x) tc.selected tc.maxSuggestions
+          (False,) <$> ((tc {mode = Selection, completions = x, selected = Just 0 {- len is at least 2 -}},) <$> replaceCurrentIO common p)
       _ -> pure (True, (tc,p))
     Selection -> cleanPrevious p.shellConfig.input >> case e of
       (KeyModifiers 0, Enter) -> case tc.selected of
@@ -107,12 +117,12 @@ instance Module' TabCompletion ShellProcess where
           let sel = case tc.selected of
                   Just a -> Just $ bool (a+1) 0 (a+1==length tc.completions)
                   Nothing -> Just 0
-          displayCompletions (curWord p.shellConfig) (sort x) sel tc.maxSuggestions
+          displayCompletions (curWord p.shellConfig) (tc.sortAlgorithm p x) sel tc.maxSuggestions
           pure (False, (tc {mode = Selection, completions = x, selected = sel}, p))
       _ -> (tc.autocomplete.model) p tc >>= (\case
         [] -> pure (True, (tc {selected = Nothing},p))
         x -> do
-          displayCompletions (curWord p.shellConfig) (sort x) Nothing tc.maxSuggestions
+          displayCompletions (curWord p.shellConfig) (tc.sortAlgorithm p x) Nothing tc.maxSuggestions
           pure (True, (tc {selected = Nothing},p))
         ) . fst
     where
@@ -121,7 +131,7 @@ instance Module' TabCompletion ShellProcess where
         (x:_) -> x
         _ -> def
       curWord c = case runParser parser.parser c.input of
-        Just (_,n) -> (\(_,c',_) -> head c') $ getRawDataWrapped n c.input c.cursorLoc
+        Just (_,n) -> (\(_,c',_) -> last c') $ getRawDataWrapped n c.input c.cursorLoc
         Nothing    -> ""
 
       replaceCurrentIO :: T.Text -> ShellProcess -> IO ShellProcess
@@ -140,27 +150,19 @@ instance Module' TabCompletion ShellProcess where
         right = T.reverse $ T.take i $ T.reverse t
         
         ninput =  left <> with <> right
-  postHook' tc p _ = tc.autocomplete.model p tc >>= \x -> (when (tc.mode == Selection) (cleanPrevious conf.input >> displayCompletions (curWord conf) (fst x) tc.selected tc.maxSuggestions) $> (True, (tc {completions = fst x}, p)))
+  postHook' tc p _ = tc.autocomplete.model p tc >>= 
+                      \x -> (when (tc.mode == Selection) (cleanPrevious conf.input >> displayCompletions (curWord conf) (tc.sortAlgorithm p $ fst x) tc.selected tc.maxSuggestions) 
+                      $> (True, (tc {completions = tc.sortAlgorithm p $ fst x}, p)))
     where
       conf = p.shellConfig
       parser = case requestModule (Proxy @ParserModule) conf.modules of
         (x:_) -> x
         _ -> def
       curWord c = case runParser parser.parser c.input of
-        Just (_,n) -> (\(_,c',_) -> head c') $ getRawDataWrapped n c.input c.cursorLoc
+        Just (_,n) -> (\(_,c',_) -> last c') $ getRawDataWrapped n c.input c.cursorLoc
         Nothing    -> ""
-  exitHook' tc p = pure (tc, p)
-{-moddata :: ShellProcess -> AutocompleteModelData
-moddata p = AutocompleteModelData {modelInput = input c, aColorScheme = colorScheme c, cursorLocation = cursorLoc c,
-              historyL = concatMap (\x -> x.history) $ requestModule (Proxy @HistoryModule) $ c.modules, executableList = executablelist' p, builtinNames = fmap fst (builtins c), 
-              modelOutput = ([],[]), mCompletionRules = completionRules c} where c = p.shellConfig
--}
 executablelist' :: ShellProcess -> [T.Text]
 executablelist' p = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache p) "executables" >>= \x -> lookupCache x "execs")
-
-
-
-
 
 countMultiple :: T.Text -> T.Text -> Int
 countMultiple w t
@@ -175,15 +177,13 @@ getRawDataWrapped n t c = getRawData n c'
     wsCount = countMultiple " '\"" leftInput
     c' = T.length t - c - wsCount
 
-
-
 languageModel :: AutocompleteModel
 languageModel proc@ShellProcess{shellConfig = conf} tc = case runParser parser.parser input of
   Just (_,n) -> do
     let (node, prevArgs, curInd) = getRawData n cursor'
     let curArg = last prevArgs
     case withProxyNode (Proxy @ProcessCall) node of
-      Just (ProcessCall e _) -> case prevArgs of
+      Just (ProcessCall e _) -> case init prevArgs of
         [] -> case filter (T.isPrefixOf curArg) execs of
           [] -> pure ([],[])
           x  -> pure (x,[])
@@ -191,7 +191,7 @@ languageModel proc@ShellProcess{shellConfig = conf} tc = case runParser parser.p
           let rule = lookupRule (nodeToText e) tc.completionRules
           argMatches <- case rule of
             Just r -> fmap (\(CompRule e _) -> e) <$> nestNTimes r (xs ++ [curArg]) (length xs)
-            Nothing -> fileMatches curArg
+            Nothing -> fmap (\(CompRule e _) -> e) <$> fileCompletionRec (const $ pure True) curArg
           pure (argMatches, [])
       Nothing -> pure ([],[])
   Nothing -> pure ([],[])
@@ -207,10 +207,10 @@ languageModel proc@ShellProcess{shellConfig = conf} tc = case runParser parser.p
     cursor' = loc - wsCount
     execs = dedup $ executablelist' proc ++ fmap fst conf.builtins
 
-    fileMatches exec = let 
+    {-fileMatches exec = let 
         d = takeDirectory (T.unpack exec)
       in (doesDirectoryExist d >>= bool (pure False) (getPermissions d <&> readable)) >>= 
-        bool (pure []) (getDirectoryContents d <&> filter (T.isPrefixOf exec) . (bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` exec) <$>) . fmap T.pack)
+        bool (pure []) (getDirectoryContents d <&> filter (T.isPrefixOf exec) . (bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` exec) <$>) . fmap T.pack)-}
 
 languageHook :: ShellProcess -> IO ()
 languageHook = undefined
@@ -265,8 +265,6 @@ nestNTimes (CompRule _ f) (t:ts) n = f t >>= \case
   _ -> pure []
 nestNTimes _ [] _ = pure []
 
-
-
 fileCompletion :: (FilePath -> IO Bool) -> (T.Text -> IO [CompletionRule]) -> (T.Text -> IO [CompletionRule])
 fileCompletion filtre nest t = do
     let d = takeDirectory $ T.unpack t
@@ -274,7 +272,8 @@ fileCompletion filtre nest t = do
     if exists then getPermissions d >>= \x ->
       if readable x then do
         localFiles <- getDirectoryContents d >>= filterM (filtre . (d</>))
-        let matches = filter (T.isPrefixOf t) $ bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` t) <$> fmap T.pack localFiles
+        localFiles' <- mapM (\x -> getFileStatus (d</>x) <&> \y -> bool x (x <> "/") (isDirectory y)) localFiles
+        let matches = filter (T.isPrefixOf t) $ bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` t) <$> fmap T.pack localFiles'
         pure $ fmap (`CompRule` nest) matches
       else pure []
     else pure []

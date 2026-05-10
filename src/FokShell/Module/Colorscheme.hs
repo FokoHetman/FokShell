@@ -15,9 +15,10 @@ data ColorschemeModule = ColorschemeModule
 
 instance Module' ColorschemeModule ShellProcess where
   initHook' tc p = pure (tc,p)
+  exitHook' tc p = pure (tc,p)
+  resetHook' tc p = pure (tc, p)
   preHook' tc p e = pure (True,(tc,p))
   postHook' tc p e = pure (True,(tc,p))
-  exitHook' tc p = pure (tc,p)
 
 
 data Color = RGB Int Int Int | Hex Int

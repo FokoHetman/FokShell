@@ -132,6 +132,7 @@ main = fokshell $ def
         , shadowText = True
         , sortAlgorithm = const sort
         }
+      , Module (def :: HistoryModule)
       , Module JobManagerModule 
         { jobs = []
         , preprocessors = [connectPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]
