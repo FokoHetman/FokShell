@@ -27,7 +27,7 @@ data JobManagerModule = JobManagerModule
 instance Def JobManagerModule where
   def = JobManagerModule
     { jobs = []
-    , preprocessors = [connectPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]
+    , preprocessors = [connectPreprocessors [substituteprefix "~" (T.pack <$> getHomeDirectory), envVarPreprocessor]]
     }
 
 instance Module' JobManagerModule ShellProcess where

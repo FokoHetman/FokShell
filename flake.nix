@@ -1,4 +1,44 @@
 {
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    niceHaskell = {
+      url = "github:saygo-png/nice-nixpkgs-haskell";
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+      };
+    };
+    systems = {
+      url = "path:./systems.nix";
+      flake = false;
+    };
+  };
+  outputs = {
+    nixpkgs,
+    systems,
+    niceHaskell,
+    hs-bindgen,
+    ...
+  }: let
+    pkgsFor = nixpkgs.lib.genAttrs (import systems) (system:
+      import nixpkgs {
+        inherit system;
+        overlays = [hs-bindgen.overlays.default];
+      });
+    eachSystem = f: nixpkgs.lib.genAttrs (import systems) (system: f system pkgsFor.${system});
+
+    program = system: pkgs:
+      pkgs.callPackage ./package.nix {
+        niceHaskell = niceHaskell.outputs.niceHaskell.${system};
+      };
+  in {
+    packages = eachSystem (system: pkgs: {
+      "saybar" = program system pkgs;
+      default = program system pkgs;
+    });
+  };
+}
+/*
+{
   description = "FokShell - a Haskell-configurable shell.";
   inputs.haskellNix.url = "github:input-output-hk/haskell.nix";
   inputs.nixpkgs.follows = "haskellNix/nixpkgs-unstable";
@@ -40,4 +80,4 @@
       packages.default = packages.hetmanshell;
       packages.fokshell = pkgs.fokshell.hsPkgs.fokshell.components.library;
     });
-}
+}*/

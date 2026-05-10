@@ -22,6 +22,19 @@ substituter pat with times n = do
     Just (NodeString t q) -> Node $ NodeString (replaceN times pat with' t) q
     _ -> node
 
+substituteprefix :: T.Text -> IO T.Text -> Preprocessor
+substituteprefix pat with n = do
+  with' <- with
+  pure . modifyNode n $ \node -> case withProxyNode (Proxy @Primitive) node of
+    Just (NodeString _ SingleQuote) -> node
+    Just (NodeString t q) -> Node $ NodeString t' q
+      where
+        t' = case T.stripPrefix pat t of
+          Nothing -> t
+          Just x  -> with' <> x
+    _ -> node
+
+
 replaceN :: Int -> T.Text -> T.Text -> T.Text -> T.Text
 replaceN 0 _ _ t = t
 replaceN x pat with input = bool (error "negative number of replaces in replaceN") (left <> right) (x>0)

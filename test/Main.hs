@@ -135,7 +135,7 @@ main = fokshell $ def
       , Module (def :: HistoryModule)
       , Module JobManagerModule 
         { jobs = []
-        , preprocessors = [connectPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]
+        , preprocessors = [connectPreprocessors [substituteprefix "~" (T.pack <$> getHomeDirectory), envVarPreprocessor]]
         }
       , Module myPrompt
       ]

@@ -61,7 +61,7 @@ Preprocessors are used on the `Node` received from the parser before deploying t
 ```hs
 JobManagerModule
     { jobs = []
-    , preprocessors = [connectPreprocessors [substituter "~" (T.pack <$> getHomeDirectory) 1, envVarPreprocessor]]
+    , preprocessors = [connectPreprocessors [substituteprefix "~" (T.pack <$> getHomeDirectory), envVarPreprocessor]]
     }
 ```
 
