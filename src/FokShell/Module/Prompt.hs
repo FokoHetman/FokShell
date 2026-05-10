@@ -22,11 +22,12 @@ data PromptModule = PromptModule
 
 instance Module' PromptModule ShellProcess where
   initHook' tc p = displayPrompt tc p $> (tc,p)
+  exitHook' tc p = pure (tc,p)
+  resetHook' tc p = pure (tc, p)
   preHook' tc p _ = pure (True,(tc,p))
   -- unluckily, the following conflicts with a lot of stuff :(
   --postHook' tc p (KeyModifiers 0, Enter) = displayPrompt tc p $> (True,(tc,p))
   postHook' tc p _ = pure (True,(tc,p))
-  exitHook' tc p = pure (tc,p)
 
 instance Def PromptModule where
   def = PromptModule 

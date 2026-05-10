@@ -18,9 +18,10 @@ instance Def CursorModule where
 
 instance Module' CursorModule ShellProcess where
   initHook' tc p = mkCursor tc $> (tc, p)
-  preHook' tc p _ = pure (True,(tc,p))
-  postHook' tc p _ = pure (True,(tc,p))
   exitHook' tc p = pure (tc,p)
+  resetHook' tc p = mkCursor tc $> (tc, p)
+  preHook' tc p _ = pure (True,(tc,p))
+  postHook' tc p _ = mkCursor tc $> (True,(tc,p))
 
 mkCursor :: CursorModule -> IO ()
 mkCursor CursorModule{shape,color} = putStr (show shape <> cursorColor color) >> hFlush  stdout

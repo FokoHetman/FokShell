@@ -19,6 +19,7 @@ import Lib.Format
 
 import Data.Functor (($>))
 import FokShell.Utils (moveCursor', redrawFromCursor)
+import Debug.Trace (traceShow)
 
 data HistoryModule = HistoryModule
   {
@@ -28,6 +29,7 @@ data HistoryModule = HistoryModule
   , appendToHistory :: T.Text -> [T.Text] ->  [T.Text]
   , writeHistory:: [T.Text] -> IO ()
   , entryLimit  :: Int
+  , addBuiltins :: Bool
   }
 
 instance Def HistoryModule where
@@ -53,12 +55,18 @@ historyFile path limit = HistoryModule {
   , writeHistory = \history -> (path >>= (`T.writeFile` T.intercalate "\n" (reverse history)))
   , appendToHistory = \x' xs -> let x = T.strip x' in bool id (x:) (not (T.null x) && Just x /= head' xs) xs
   , entryLimit = limit
+  , addBuiltins = False
   }
+
+historyBuiltin :: Builtin
+historyBuiltin = undefined
 
 instance Module' HistoryModule ShellProcess where
   initHook' tc p = do
     history <- tc.getHistory
-    pure (tc {history = history}, p)
+    pure (tc {history = history}, p {shellConfig = p.shellConfig {builtins = bool id (historyBuiltin:) tc.addBuiltins $ p.shellConfig.builtins}})
+  exitHook' tc p = tc.writeHistory (take tc.entryLimit tc.history) >> pure (tc,p)
+  resetHook' tc p = pure (tc, p)
   preHook' tc p (KeyModifiers 0, Enter) = pure (True,(tc {history=tc.appendToHistory p.shellConfig.input tc.history, historyIndex = Nothing},p))
   preHook' tc p (KeyModifiers 0, Arrow Up) = when (T.length (input conf) - cursorLoc conf > 0 ) (moveCursor' conf DLeft (T.length (input conf) - cursorLoc conf)) >> 
             (\(tc', conf') ->  redrawFromCursor conf' {cursorLoc = T.length $ conf'.input} >>  moveCursor' conf' {cursorLoc = T.length $ conf'.input} DRight (T.length $ conf'.input) $> (True, (tc',p {shellConfig = conf' {cursorLoc = 0}})))
@@ -81,4 +89,3 @@ instance Module' HistoryModule ShellProcess where
             conf = p.shellConfig
   preHook' tc p _ = pure (True,(tc,p))
   postHook' tc p e = pure (True, (tc,p))
-  exitHook' tc p = tc.writeHistory (take tc.entryLimit tc.history) >> pure (tc,p)

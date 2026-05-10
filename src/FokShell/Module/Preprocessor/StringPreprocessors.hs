@@ -15,12 +15,12 @@ import Control.Applicative
 import Data.Data (Proxy(Proxy))
 
 substituter :: T.Text -> IO T.Text -> Int -> Preprocessor
-substituter pat with times node = do
+substituter pat with times n = do
   with' <- with
-  case withProxyNode (Proxy @Primitive) node of
-    Just (NodeString _ SingleQuote) -> pure node
-    Just (NodeString t q) -> pure $ Node $ NodeString (replaceN times pat with' t) q
-    _ -> pure node
+  pure . modifyNode n $ \node -> case withProxyNode (Proxy @Primitive) node of
+    Just (NodeString _ SingleQuote) -> node
+    Just (NodeString t q) -> Node $ NodeString (replaceN times pat with' t) q
+    _ -> node
 
 replaceN :: Int -> T.Text -> T.Text -> T.Text -> T.Text
 replaceN 0 _ _ t = t

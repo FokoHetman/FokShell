@@ -16,16 +16,17 @@ import Data.Functor
 import Text.Regex.TDFA
 import Data.Map qualified as Map
 import FokShell.Module.TabCompletion
+import Data.Data (Proxy(Proxy))
 
-{-
+
 -- builtins {{{
-set, cd, bmap, regex :: Builtin
-set = ("set", set')
+cd, regex :: Builtin
 cd = ("cd", cd')
-bmap = ("map", bmap')
+--set = ("set", set')
+--bmap = ("map", bmap')
 regex = ("regex", regex')
 
-cd', set', bmap', regex' :: [T.Text] -> (TaskPipeType,TaskPipeType,TaskPipeType) -> ShellProcess -> IO (ExitCode,ShellProcess)
+cd', regex' :: [T.Text] -> (TaskPipeType,TaskPipeType,TaskPipeType) -> ShellProcess -> IO (ExitCode,ShellProcess)
 cd' args (_inh, outh, errh) process = do
     errHandle <- case errh of
       Terminal -> pure stderr
@@ -39,14 +40,15 @@ cd' args (_inh, outh, errh) process = do
       []  -> writeErr "cd: no arg provided.\n"
       _   -> writeErr "cd: too many args provided.\n"
     pure (ExitSuccess, process)
-set' args (inh, outh, errh) process = let
+
+{-set' args (inh, outh, errh) process = let
       f n = case outh of
           ProcessData oref -> putMVar oref (Left $ Set n) $> (ExitSuccess, process)
           Terminal -> displaySet n $> (ExitSuccess, process)
           File fname mode -> (openFile fname mode >>= (`T.hPutStr` (setToJson n))) $> (ExitSuccess, process)
     in case inh of
       ProcessData ref -> readMVar ref >>= \case
-        Left (Set n) -> f n 
+        Left n -> case withProxyNode (Proxy @SetExp)
         Right h -> do
           content <- hGetContents h
           case runParser jsonset $ T.pack content of
@@ -54,6 +56,7 @@ set' args (inh, outh, errh) process = let
             _ -> error "no parse"
         _ -> error "invalid argument"
       _ -> undefined
+
 bmap' args (inh, outh, errh) process = case inh of
     ProcessData ref -> do
       let (name:argv) = args
@@ -82,21 +85,22 @@ bmap' args (inh, outh, errh) process = case inh of
           pure (ExitSuccess, process)
         Right _ -> error "map expects either an Array or a Set"
     _ -> undefined
+-}
 regex' args (inh, outh, errh) process = case inh of
     ProcessData ref -> do
       a <- readMVar ref
       case a of
         Left n' -> do
-          let n = case n' of
-                NodeString x _ -> x
-                ProcessCall x _ -> nodeToString x
+          let (n,q) = case withProxyNode (Proxy @Primitive) n' of
+                Just (NodeString x q) -> (x,q)
+                --ProcessCall x _ -> nodeToString x
                 _ -> error "invalid node provided"
           let arg = case args of
                   (x:_) -> x
                   _ -> ""
           let newt :: [String] = getAllTextMatches (T.unpack n =~ T.unpack arg)
           case outh of
-            ProcessData ref' -> putMVar ref' . Left . Array $ fmap ((`NodeString` True) . T.pack) newt
+            ProcessData ref' -> putMVar ref' . Left . Node . ArrayExp $ fmap (Node . (`NodeString` q) . T.pack) newt
             Terminal -> putStrLn $ unwords newt
             _ -> pure ()
           pure (ExitSuccess, process)
@@ -107,7 +111,7 @@ regex' args (inh, outh, errh) process = case inh of
                   _ -> ""
           let newt :: [String] = getAllTextMatches (content =~ T.unpack arg)
           case outh of
-            ProcessData ref' -> putMVar ref' . Left . Array $ fmap ((`NodeString` True) . T.pack) newt
+            ProcessData ref' -> putMVar ref' . Left . Node . ArrayExp $ fmap (Node . (`NodeString` SingleQuote) . T.pack) newt
             Terminal -> putStrLn $ unwords newt
             _ -> pure ()
           pure (ExitSuccess, process)
@@ -121,7 +125,7 @@ regex' args (inh, outh, errh) process = case inh of
       pure (ExitFailure $ -1, process)
 
 -- }}}
--}
+
 -- completions {{{
 {-nix :: CompletionRule
 nix = CompRule "nix" (\t -> pure $ filter (\(CompRule i _) -> t `T.isPrefixOf` i) [
