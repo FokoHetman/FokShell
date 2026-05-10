@@ -16,13 +16,12 @@
     nixpkgs,
     systems,
     niceHaskell,
-    hs-bindgen,
     ...
   }: let
     pkgsFor = nixpkgs.lib.genAttrs (import systems) (system:
       import nixpkgs {
         inherit system;
-        overlays = [hs-bindgen.overlays.default];
+        overlays = [];
       });
     eachSystem = f: nixpkgs.lib.genAttrs (import systems) (system: f system pkgsFor.${system});
 
@@ -32,7 +31,7 @@
       };
   in {
     packages = eachSystem (system: pkgs: {
-      "saybar" = program system pkgs;
+      "hetmanshell" = program system pkgs;
       default = program system pkgs;
     });
   };
