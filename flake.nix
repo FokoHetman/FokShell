@@ -25,15 +25,13 @@
       });
     eachSystem = f: nixpkgs.lib.genAttrs (import systems) (system: f system pkgsFor.${system});
 
-    program = system: pkgs:
+    program = system: pkgs: configuration: 
       pkgs.callPackage ./package.nix {
         niceHaskell = niceHaskell.outputs.niceHaskell.${system};
+        inherit configuration;
       };
   in {
-    packages = eachSystem (system: pkgs: {
-      "hetmanshell" = program system pkgs;
-      default = program system pkgs;
-    });
+    packages = eachSystem (system: pkgs: builtins.listToAttrs (map (s: {name=s;value=program system pkgs s;}) ["hetmanshell"]));
   };
 }
 /*
