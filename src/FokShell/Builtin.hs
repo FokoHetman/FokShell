@@ -141,8 +141,6 @@ nix = CompRule "nix" (\t -> pure $ filter (\(CompRule i _) -> t `T.isPrefixOf` i
         _ -> undefined
 -}
 
-cdCompletion :: CompletionRule
-cdCompletion = CompRule "cd" $ fileCompletion (safeCheck $ (<&> isDirectory) . getFileStatus) $ const (pure [])
 -- }}}
 
 -- vim: foldmethod=marker

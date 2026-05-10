@@ -51,7 +51,7 @@ instance Def TabCompletion where
     , autocomplete = def
     , maxSuggestions = 10
     , shadowText = True
-    , completionRules = []
+    , completionRules = [cdCompletion ]
     }
 
 cleanPrevious :: T.Text -> IO ()
@@ -272,7 +272,7 @@ fileCompletion filtre nest t = do
     if exists then getPermissions d >>= \x ->
       if readable x then do
         localFiles <- getDirectoryContents d >>= filterM (filtre . (d</>))
-        localFiles' <- mapM (\x -> getFileStatus (d</>x) <&> \y -> bool x (x <> "/") (isDirectory y)) localFiles
+        localFiles' <- mapM (\x -> safeCheck (\y -> isDirectory <$> getFileStatus y) (d</>x) <&> bool x (x <> "/")) localFiles
         let matches = filter (T.isPrefixOf t) $ bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` t) <$> fmap T.pack localFiles'
         pure $ fmap (`CompRule` nest) matches
       else pure []
@@ -282,3 +282,6 @@ fileCompletionRec filtr = fileCompletion filtr (fileCompletionRec filtr)
 
 fileListCompletion :: (FilePath -> IO Bool) -> T.Text -> CompletionRule
 fileListCompletion filtr = (`CompRule` fileCompletionRec filtr)
+
+cdCompletion :: CompletionRule
+cdCompletion = CompRule "cd" $ fileCompletion (safeCheck $ (<&> isDirectory) . getFileStatus) $ const (pure [])
