@@ -31,7 +31,7 @@ updatePath proc = do
     Just x -> pure x
     _ -> pure ""
   localFiles <- getDirectoryContents =<< getCurrentDirectory
-  localExecusets <- fmap ("./" <>) <$> (mapM canonicalizePath localFiles >>= filterM (fmap executable . getPermissions))
+  localExecusets <- fmap ("./" <>) <$> (mapM canonicalizePath localFiles >>= filterM (safeCheck (fmap executable . getPermissions)))
   pathExecs <- (pathExecusets >>= mapM canonicalizePath . concat)  <&> fmap takeFileName
   let envcache = Entry ("executables", Cache [Entry ("PATH", toDyn path), Entry ("execs", toDyn $ fmap T.pack $ pathExecs ++ localExecusets)])
 
