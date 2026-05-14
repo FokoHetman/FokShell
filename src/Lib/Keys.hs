@@ -5,18 +5,18 @@ import qualified Data.Bits as B
 
 import Lib.Format
 
-data KeyCode = Fn | Escape | Arrow Direction | Enter | Tab | Backspace | Delete | Character T.Text
+data KeyCode = Fn | Escape | Arrow Direction | Enter | Tab | Backspace | Delete | Character T.Text | Home | End | F Int | Page Direction
     deriving (Show,Eq)
 newtype KeyModifiers = KeyModifiers Int
     deriving (Show,Eq)
 control :: KeyModifiers
-control = KeyModifiers 1  -- 2^0
+control = KeyModifiers 4
 
 shift :: KeyModifiers
-shift = KeyModifiers 2    -- 2^1
+shift = KeyModifiers 1
 
 alt :: KeyModifiers
-alt = KeyModifiers 4      -- 2^2
+alt = KeyModifiers 2
 
 (.|.) :: KeyModifiers -> KeyModifiers -> KeyModifiers
 (KeyModifiers a) .|. (KeyModifiers b) = KeyModifiers (a B..|. b)
