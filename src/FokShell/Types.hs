@@ -20,6 +20,7 @@ import System.IO (openFile, IOMode)
 import FokShell.Module qualified as Module
 import Control.Exception (catch)
 import System.IO.Error (ioeGetErrorType, ioeGetErrorString, ioeGetFileName)
+import FokShell.Module (ModuleContainer)
 
 data Process = Process {
   pid       :: Pid
@@ -39,6 +40,9 @@ data ShellProcess = ShellProcess {
   , shellState  :: State
   , shellCache  :: Cache T.Text (Cache T.Text Dynamic)
 }
+instance ModuleContainer ShellProcess where
+  getModules p = p.shellConfig.modules
+  setModules p m = p {shellConfig = p.shellConfig {modules=m}}
 
 type Action = ShellProcess -> IO ShellProcess
 type Builtin = (T.Text, [T.Text] -> (TaskPipeType, TaskPipeType, TaskPipeType) -> ShellProcess -> IO (ExitCode, ShellProcess))

@@ -18,19 +18,19 @@ import System.Directory (getHomeDirectory)
 import FokShell.Module.Preprocessor (connectPreprocessors)
 import FokShell.Module.Parser
 import Data.Data (Proxy(Proxy))
-data JobManagerModule = JobManagerModule
+data JobManager = JobManager
   {
     jobs :: [Job]
   , preprocessors :: [Preprocessor]
   }
 
-instance Def JobManagerModule where
-  def = JobManagerModule
+instance Def JobManager where
+  def = JobManager
     { jobs = []
-    , preprocessors = [connectPreprocessors [substituteprefix "~" (T.pack <$> getHomeDirectory), envVarPreprocessor]]
+    , preprocessors = [connectPreprocessors [substituteprefix "~" (const $ T.pack <$> getHomeDirectory), envVarPreprocessor]]
     }
 
-instance Module' JobManagerModule ShellProcess where
+instance Module' JobManager ShellProcess where
   initHook' tc p = pure (tc,p)
   exitHook' tc p = pure (tc, p)
   resetHook' tc p = pure (tc, p)
@@ -43,16 +43,16 @@ instance Module' JobManagerModule ShellProcess where
           let parser = case requestModule (Proxy @ParserModule) conf.modules of
                     (x:_) -> x
                     _ -> def
-          let task = runParser parser.parser input' <&> (>>= makeTask) . preprocess . snd
+          let task = runParser parser.parser input' <&> (>>= makeTask) . preprocess p . snd
           (job, p') <- case task of
             Just t' -> t' >>= \t -> do
               mvar <- newEmptyMVar
               let job = Job t mvar
-              p <- spawnJob (p {shellConfig = conf { input="", cursorLoc=0 }}) job
-              pure (Just job, p)
+              p' <- spawnJob (p {shellConfig = conf { input="", cursorLoc=0 }}) job
+              pure (Just job, p')
             Nothing -> pure (Nothing, p {shellConfig = conf {input="",cursorLoc=0}})
 
-          displayPrompt' p
+          displayPrompt' p'
           case job of 
             Just x -> pure (False, (tc {jobs = x:jobs tc}, p'))
             Nothing -> pure (False, (tc, p'))

@@ -31,12 +31,12 @@ ColorschemeModule
     }
 ```
 
-### CursorModule
+### Cursor
 
 used to define the cursor style
 
 ```hs
-CursorModule
+Cursor
     { shape = BlinkingBar
     , color = RGB 200 200 255
     }
@@ -59,7 +59,7 @@ Job Manager is used to run the parser, convert node into a task and finally depl
 Preprocessors are used on the `Node` received from the parser before deploying the job.
 
 ```hs
-JobManagerModule
+JobManager
     { jobs = []
     , preprocessors = [connectPreprocessors [substituteprefix "~" (T.pack <$> getHomeDirectory), envVarPreprocessor]]
     }

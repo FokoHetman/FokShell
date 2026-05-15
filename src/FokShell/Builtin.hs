@@ -17,6 +17,9 @@ import Text.Regex.TDFA
 import Data.Map qualified as Map
 import FokShell.Module.TabCompletion
 import Data.Data (Proxy(Proxy))
+import FokShell.Module.DirectoryTracker (DirectoryTracker(DirectoryTracker, directories))
+import Debug.Trace (traceShow)
+import FokShell.Module (requestModule, modifyModule)
 
 
 -- builtins {{{
@@ -33,14 +36,19 @@ cd' args (_inh, outh, errh) process = do
       File fname mode -> openFile fname mode
       _ -> undefined
     let writeErr = T.hPutStr errHandle
-    _ <- case args of
+    case args of
       [x] -> do
         let d = T.unpack x
-        doesDirectoryExist d >>= bool (writeErr "cd: directory does not exist.\n") (getPermissions d >>= bool (writeErr "cd: no permissions.\n") (changeWorkingDirectory d) . searchable)
-      []  -> writeErr "cd: no arg provided.\n"
-      _   -> writeErr "cd: too many args provided.\n"
-    pure (ExitSuccess, process)
-
+        doesDirectoryExist d >>= bool 
+          (writeErr ("cd: directory `" <> T.pack d <> "` does not exist.\n") $> (ExitFailure 1, process))
+          ((searchable <$> getPermissions d) >>= bool
+            (writeErr "cd: no permissions.\n" $> (ExitFailure 1, process))
+            (changeWorkingDirectory d
+              >> (canonicalizePath d <&> (ExitSuccess,) . updateDirTracker)))
+      []  -> pure $ (ExitSuccess, process)
+      _   -> writeErr "cd: too many args provided.\n" $> (ExitFailure 2, process)
+  where
+    updateDirTracker d = (modifyModule' (Proxy @DirectoryTracker) process (\tracker -> tracker{directories=d:tracker.directories}))
 {-set' args (inh, outh, errh) process = let
       f n = case outh of
           ProcessData oref -> putMVar oref (Left $ Set n) $> (ExitSuccess, process)

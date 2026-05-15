@@ -14,7 +14,7 @@ import FokShell.Module.Prompt
 import System.Directory (getHomeDirectory)
 import FokShell.Module.Preprocessor.StringPreprocessors (substituter, envVarPreprocessor)
 import Data.List (sort)
-import FokShell.Module.History (withHomeDir, historyFile, HistoryModule)
+import FokShell.Module.History (withHomeDir, historyFile, History)
 import System.Exit (exitSuccess)
 
 import FokShell.Builtin
@@ -23,13 +23,15 @@ import FokShell.Module qualified as Module
 import GHC.IO.Handle (hFlush)
 import System.IO (stdout)
 import FokShell.Module.Parser (ParserModule)
+import FokShell.Module.DirectoryTracker (DirectoryTracker)
 
 instance Def [Module ShellProcess] where
   def =
-    [ Module (def :: PromptModule)
+    [ Module (def :: DirectoryTracker)
+    , Module (def :: Prompt)
     , Module (def :: TabCompletion)
-    , Module (def :: HistoryModule)
-    , Module (def :: JobManagerModule)
+    , Module (def :: History)
+    , Module (def :: JobManager)
     , Module (def :: ParserModule)
     ]
 
@@ -50,11 +52,11 @@ instance Def [Builtin] where
 
 haltAction :: Action
 haltAction proc = do
-  (modules, p) <- chainHook proc.shellConfig.modules proc resetHook
-  putStrLn "^C" >> displayPrompt' proc $> p {shellConfig = p.shellConfig {input = "",cursorLoc=0, modules=modules}}
+  p <- chainHook proc resetHook
+  putStrLn "^C" >> displayPrompt' proc $> p {shellConfig = p.shellConfig {input = "",cursorLoc=0}}
 
 exitAction :: Action
-exitAction p = Module.chainHook p.shellConfig.modules p Module.exitHook >> exitSuccess
+exitAction p = Module.chainHook p Module.exitHook >> exitSuccess
 
 
 clearAction :: Action

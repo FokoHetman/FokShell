@@ -46,8 +46,8 @@ fokshell config = do
   hSetBuffering stdin NoBuffering
   
   proc <- updatePath $ ShellProcess {shellConfig = config, shellState = InputOutput, shellCache = Cache []}
-  (modules, p) <- chainHook proc.shellConfig.modules proc initHook
-  shellProcRef <- newIORef p {shellConfig = p.shellConfig {modules = modules}}
+  p <- chainHook proc initHook
+  shellProcRef <- newIORef p --{shellConfig = p.shellConfig {modules = modules}}
 
   done <- newEmptyMVar
   _ <- installHandler sigINT (Catch $ handleSignal shellProcRef done) Nothing
@@ -69,8 +69,7 @@ bool' a b c = bool b c a
 
 parseEvent :: ShellProcess -> KeyEvent -> IO ShellProcess 
 parseEvent proc' key = do 
-  (b, (modules, proc'')) <- chainEventHook proc'.shellConfig.modules proc' preHook key
-  let proc = proc'' {shellConfig = proc''.shellConfig {modules=modules}}
+  (b, proc) <- chainEventHook proc' preHook key
   out <- bool' b (pure proc) $ do
     let conf = shellConfig proc
     let state = shellState proc
@@ -142,8 +141,8 @@ parseEvent proc' key = do
         case bind of
           (x:_) -> snd x proc
           _ -> pure proc
-  (b', (modules, p)) <- chainEventHook out.shellConfig.modules out postHook key
-  pure $ updateWithKey key p {shellConfig = p.shellConfig {modules = modules}}
+  (b', p) <- chainEventHook out postHook key
+  pure $ updateWithKey key p
     where
     addToInput c t = c {input = T.concat [left, t, right]}
       where

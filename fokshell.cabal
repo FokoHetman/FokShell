@@ -65,6 +65,7 @@ library
                     , FokShell.Module
                     , FokShell.Module.Colorscheme
                     , FokShell.Module.Cursor
+                    , FokShell.Module.DirectoryTracker
                     , FokShell.Module.History
                     , FokShell.Module.JobManager
                     , FokShell.Module.Parser

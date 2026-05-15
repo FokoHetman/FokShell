@@ -74,32 +74,3 @@ getKey "R" = F 3
 getKey "S" = F 4
 getKey "Z" = Tab
 getKey _x = traceShow ("unknown character", _x) $ Character ""
-{-stringToKeyEvent x = (KeyModifiers 0, Character $ T.pack x)
-          | head x == '\ESC' && length x > 1= case x!!1 of
-            '[' -> case x!!2 of
-              '1' -> if x!!3 == ';' then (modifierMatch $ x!!4, getKey $ x!!5)  else unknown
-              a   -> (KeyModifiers 0, getKey a)
-            _  -> (KeyModifiers 0, Escape)
-          | head x == '\ESC' = (KeyModifiers 0, Escape)
-          | length x == 1 = charMatch $ head x
-          | otherwise         = (KeyModifiers 0, Character $ T.pack x)
-  where
-    modifierMatch '2' = shift
-    modifierMatch '3' = alt
-    modifierMatch '4' = alt .|. shift
-    modifierMatch '5' = control
-    modifierMatch '6' = control .|. shift
-    modifierMatch '7' = control .|. alt
-    modifierMatch '8' = alt .|. control .|. shift
-    modifierMatch _ = KeyModifiers 0
-
-    charMatch :: Char -> KeyEvent
-    charMatch ch
-              | '\DEL' == ch          = (KeyModifiers 0, Backspace)
-              | '\ESC' == ch        = (KeyModifiers 0, Escape)
-              | '\t' == ch          = (KeyModifiers 0, Tab)
-              | '\n' == ch          = (KeyModifiers 0, Enter)
-              | 20 >= ord ch && ord ch > 0 = (control, Character $ T.pack $ singleton $ chr $ ord ch + 96)
-              | 254 >= ord ch && ord ch > 224 = (alt, Character $ T.pack $ singleton $ chr $ ord ch - 128)
-              | otherwise = (KeyModifiers 0, Character $ T.pack $ singleton ch)
-    unknown = (KeyModifiers 0, Escape)-}

@@ -13,18 +13,19 @@ import System.Environment.Blank (getEnv)
 import Data.Functor ((<&>))
 import Control.Applicative
 import Data.Data (Proxy(Proxy))
+import FokShell.Types (ShellProcess)
 
-substituter :: T.Text -> IO T.Text -> Int -> Preprocessor
-substituter pat with times n = do
-  with' <- with
+substituter :: T.Text -> (ShellProcess -> IO T.Text) -> Int -> Preprocessor
+substituter pat with times p n = do
+  with' <- with p
   pure . modifyNode n $ \node -> case withProxyNode (Proxy @Primitive) node of
     Just (NodeString _ SingleQuote) -> node
     Just (NodeString t q) -> Node $ NodeString (replaceN times pat with' t) q
     _ -> node
 
-substituteprefix :: T.Text -> IO T.Text -> Preprocessor
-substituteprefix pat with n = do
-  with' <- with
+substituteprefix :: T.Text -> (ShellProcess -> IO T.Text) -> Preprocessor
+substituteprefix pat with p n = do
+  with' <- with p
   pure . modifyNode n $ \node -> case withProxyNode (Proxy @Primitive) node of
     Just (NodeString _ SingleQuote) -> node
     Just (NodeString t q) -> Node $ NodeString t' q
@@ -46,7 +47,7 @@ replaceN x pat with input = bool (error "negative number of replaces in replaceN
 
 
 envVarPreprocessor :: Preprocessor
-envVarPreprocessor node = case withProxyNode (Proxy @Primitive) node of
+envVarPreprocessor _p node = case withProxyNode (Proxy @Primitive) node of
   Just (NodeString _ SingleQuote) -> pure node
   Just (NodeString s q) -> case runParser (many substringParser) s of
       Just (leftover, xs) -> Node . (`NodeString` q) . (<>leftover) . T.concat <$> sequence xs

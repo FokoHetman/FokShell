@@ -9,13 +9,13 @@ import FokShell.Utils
 import FokShell.Module
 import FokShell.Module.Colorscheme
 import FokShell.Module.Cursor
+import FokShell.Module.DirectoryTracker
 import FokShell.Module.History
 import FokShell.Module.JobManager
 import FokShell.Module.Preprocessor
 import FokShell.Module.Preprocessor.StringPreprocessors
 import FokShell.Module.Prompt
 import FokShell.Module.TabCompletion
-
 import Lib.Primitive
 import Lib.Format
 import FokShell.Types
@@ -70,8 +70,8 @@ latte = Colorscheme {
 colorSchemes :: [Colorscheme]
 colorSchemes = [gruvbox, gruvboxLight, latte]
 
-myPrompt :: PromptModule
-myPrompt = PromptModule 
+myPrompt :: Prompt
+myPrompt = Prompt 
   { components =
     fmap (PromptComponent . TextComponent)
     [ (pure "[", \cs -> foreground $ cs.userColors!!0)
@@ -84,8 +84,8 @@ myPrompt = PromptModule
     ]
   }
 
-myCoolPrompt :: PromptModule
-myCoolPrompt = PromptModule
+myCoolPrompt :: Prompt
+myCoolPrompt = Prompt
   { components = fmap (PromptComponent . TextComponent) [
       (pure "╭──", \cs -> foreground $ head cs.userColors)
     , (T.pack <$> getEffectiveUserName, \cs -> foreground (head cs.userColors) <> bold)
@@ -98,8 +98,8 @@ myCoolPrompt = PromptModule
     ]
   }
 
-myCursor :: CursorModule
-myCursor = CursorModule
+myCursor :: Cursor
+myCursor = Cursor
   {
     shape = BlinkingBar
   , color = RGB 255 255 255
@@ -121,8 +121,8 @@ main = fokshell $ def
         let config = shellConfig proc in let conf = config {colorScheme = nextColorScheme (colorScheme config)} in redraw conf $> proc {shellConfig = conf})-}
       ]
     , modules =
-      [ 
-        Module (myCursor :: CursorModule)
+      [ Module (def :: DirectoryTracker)
+      , Module myCursor
       , Module ColorschemeModule 
         { colorschemes = colorSchemes
         , current = 0
@@ -132,10 +132,10 @@ main = fokshell $ def
         , shadowText = True
         , sortAlgorithm = const sort
         }
-      , Module (def :: HistoryModule)
-      , Module JobManagerModule 
+      , Module (def :: History)
+      , Module JobManager 
         { jobs = []
-        , preprocessors = [connectPreprocessors [substituteprefix "~" (T.pack <$> getHomeDirectory), envVarPreprocessor]]
+        , preprocessors = [connectPreprocessors [substituteprefix "~" (const $ T.pack <$> getHomeDirectory), envVarPreprocessor]]
         }
       , Module myPrompt
       ]

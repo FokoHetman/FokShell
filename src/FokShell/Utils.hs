@@ -116,7 +116,7 @@ mkTask x = error $ "unknown task: " <> show x
 -}
 
 modifyModule' :: forall a. (Module.Module' a ShellProcess,Typeable a) => Proxy a -> ShellProcess -> (a -> a) -> ShellProcess
-modifyModule' p proc f = proc {shellConfig = proc.shellConfig {modules = Module.modifyModule p proc.shellConfig.modules f}}
+modifyModule' p proc f = proc {shellConfig = proc.shellConfig {modules = m}} where m = Module.modifyModule p proc.shellConfig.modules f
 
 updateWithKey :: KeyEvent -> ShellProcess -> ShellProcess
 updateWithKey event proc = proc {shellConfig = (shellConfig proc) {lastEvent=event}}
@@ -129,5 +129,10 @@ displaySet t = T.putStrLn $ T.concat $ intersperse "\n" $ fmap display' $ Map.to
 
 display' :: (Node, Node) -> T.Text
 display' (n1, n2) = nodeToText n1 <> ": " <> nodeToText n2
+
+head' [] = Nothing
+head' (x:_) = Just x
+tail' [] = Nothing
+tail' (_:xs) = Just xs
 
 

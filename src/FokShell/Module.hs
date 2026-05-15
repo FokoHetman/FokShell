@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GADTs, ScopedTypeVariables #-}
 module FokShell.Module where
 import Lib.Keys (KeyEvent)
 import Control.Arrow (Arrow(first, second))
@@ -36,26 +36,46 @@ preHook (Module a) p e = second (first Module) <$> preHook' a p e
 postHook :: Module p -> p -> KeyEvent -> IO (Bool, (Module p, p))
 postHook (Module a) p e = second (first Module) <$> postHook' a p e
 
-chainHook :: [Module p] -> p -> (Module p -> p -> IO (Module p, p)) -> IO ([Module p], p)
-chainHook [] p _ = pure ([], p)
-chainHook [x] p hook = first singleton <$> hook x p
-chainHook (x:xs) p hook = do
-  (x',p') <- hook x p
-  (xs',p'') <- chainHook xs p' hook
-  pure (x':xs',p'')
+class ModuleContainer p where
+  getModules :: p -> [Module p]
+  setModules :: p -> [Module p] -> p
 
-chainEventHook :: [Module p] -> p -> (Module p -> p -> KeyEvent -> IO (Bool, (Module p, p))) -> KeyEvent -> IO (Bool, ([Module p], p))
-chainEventHook [] p _ _ = pure (True, ([], p))
-chainEventHook [x] p hook event = second (first singleton) <$> hook x p event
-chainEventHook (x:xs) p hook event = do
-  (b, (x', p')) <- hook x p event
-  bool
-    (pure (b, (x':xs, p')))
-    (do
-      (b',(xs',p'')) <- chainEventHook xs p' hook event
-      (pure (b && b', (x':xs', p'')))
-    )
-    b
+chainHook :: forall p. ModuleContainer p => p -> (Module p -> p -> IO (Module p, p)) -> IO  p
+chainHook p hook = go p $ length $ getModules p
+  where
+    go :: p -> Int -> IO p
+    go p 0 = pure p
+    go p x = do
+      let ms = getModules p
+          i = (length ms - x)
+      case splitAt i ms of
+        (_,[]) -> pure p
+        (_,m:_) -> do
+          (m', p') <- hook m p
+          let ms' = replaceAt i m' $ getModules p'
+          let p'' = setModules p' ms'
+          go p'' (x-1)
+
+replaceAt :: Int -> a -> [a] -> [a]
+replaceAt _ _ [] = []
+replaceAt 0 y (_:xs) = y:xs
+replaceAt i y (x:xs) = x:replaceAt (i-1) y xs
+
+chainEventHook :: forall p. ModuleContainer p => p -> (Module p -> p -> KeyEvent -> IO (Bool, (Module p, p))) -> KeyEvent -> IO (Bool, p)
+chainEventHook p hook event = go p $ length $ getModules p
+  where
+    go :: p -> Int -> IO (Bool, p)
+    go p 0 = pure (True, p)
+    go p x = do
+      let ms = getModules p
+          i = (length ms - x)
+      case splitAt i ms of
+        (_,[]) -> pure (True,p)
+        (_,m:_) -> do
+          (b,(m', p')) <- hook m p event
+          let ms' = replaceAt i m' $ getModules p'
+          let p'' = setModules p' ms'
+          bool (pure (b,p'')) (go p'' (x-1)) b
 
 withProxy :: forall i p. Typeable i => Proxy i -> Module p -> Maybe i
 withProxy _ (Module a) = cast a

@@ -18,10 +18,9 @@ import System.Posix (createFile, ownerReadMode, ownerWriteMode, closeFd)
 import Lib.Format
 
 import Data.Functor (($>))
-import FokShell.Utils (moveCursor', redrawFromCursor)
-import Debug.Trace (traceShow)
+import FokShell.Utils (head', moveCursor', redrawFromCursor)
 
-data HistoryModule = HistoryModule
+data History = History
   {
     history     :: [T.Text]
   , historyIndex:: Maybe (Int, T.Text)
@@ -32,17 +31,14 @@ data HistoryModule = HistoryModule
   , addBuiltins :: Bool
   }
 
-instance Def HistoryModule where
+instance Def History where
   def = historyFile (withHomeDir ".config/fokshell/history") 10000
 
 withHomeDir :: FilePath -> IO FilePath
 withHomeDir p = getHomeDirectory <&> (</> p)
 
-head' [] = Nothing
-head' (x:xs) = Just x
-
-historyFile :: IO FilePath -> Int -> HistoryModule
-historyFile path limit = HistoryModule {
+historyFile :: IO FilePath -> Int -> History
+historyFile path limit = History {
     history = []
   , historyIndex = Nothing
   , getHistory = do
@@ -61,7 +57,7 @@ historyFile path limit = HistoryModule {
 historyBuiltin :: Builtin
 historyBuiltin = undefined
 
-instance Module' HistoryModule ShellProcess where
+instance Module' History ShellProcess where
   initHook' tc p = do
     history <- tc.getHistory
     pure (tc {history = history}, p {shellConfig = p.shellConfig {builtins = bool id (historyBuiltin:) tc.addBuiltins $ p.shellConfig.builtins}})

@@ -8,23 +8,23 @@ import FokShell.Module
 
 import Data.Functor
 
-data CursorModule = CursorModule
+data Cursor = Cursor
   {
     shape :: CursorShape
   , color :: Color
   }
-instance Def CursorModule where
-  def = CursorModule { shape = BlinkingBar, color = RGB 255 255 255 }
+instance Def Cursor where
+  def = Cursor { shape = BlinkingBar, color = RGB 255 255 255 }
 
-instance Module' CursorModule ShellProcess where
+instance Module' Cursor ShellProcess where
   initHook' tc p = mkCursor tc $> (tc, p)
   exitHook' tc p = pure (tc,p)
   resetHook' tc p = mkCursor tc $> (tc, p)
   preHook' tc p _ = pure (True,(tc,p))
   postHook' tc p _ = mkCursor tc $> (True,(tc,p))
 
-mkCursor :: CursorModule -> IO ()
-mkCursor CursorModule{shape,color} = putStr (show shape <> cursorColor color) >> hFlush  stdout
+mkCursor :: Cursor -> IO ()
+mkCursor Cursor{shape,color} = putStr (show shape <> cursorColor color) >> hFlush  stdout
 
 cursorColor :: Color -> String
 cursorColor c = "\ESC]12;" <> show hex <> "\a"

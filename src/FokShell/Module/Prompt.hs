@@ -15,12 +15,12 @@ import System.IO (stdout, hFlush)
 import Debug.Trace
 import Data.Proxy
 import FokShell.Module.Colorscheme (foreground, Colorscheme)
-data PromptModule = PromptModule
+data Prompt = Prompt
   { components :: [PromptComponent]
   }
 
 
-instance Module' PromptModule ShellProcess where
+instance Module' Prompt ShellProcess where
   initHook' tc p = displayPrompt tc p $> (tc,p)
   exitHook' tc p = pure (tc,p)
   resetHook' tc p = pure (tc, p)
@@ -29,8 +29,8 @@ instance Module' PromptModule ShellProcess where
   --postHook' tc p (KeyModifiers 0, Enter) = displayPrompt tc p $> (True,(tc,p))
   postHook' tc p _ = pure (True,(tc,p))
 
-instance Def PromptModule where
-  def = PromptModule 
+instance Def Prompt where
+  def = Prompt 
       { components =
           fmap (PromptComponent . TextComponent)
             [ (pure "[", foreground . (.textColor))
@@ -53,12 +53,12 @@ render :: ShellProcess -> PromptComponent -> IO T.Text
 render p (PromptComponent c) = render' p c
 
 
-displayPrompt :: PromptModule -> ShellProcess -> IO ()
-displayPrompt (PromptModule {components}) p = mapM (render p) components >>= T.putStr . T.concat >> hFlush stdout
+displayPrompt :: Prompt -> ShellProcess -> IO ()
+displayPrompt (Prompt {components}) p = mapM (render p) components >>= T.putStr . T.concat >> hFlush stdout
 
 
 displayPrompt' :: ShellProcess -> IO ()
-displayPrompt' proc = mapM_ (`displayPrompt` proc) $ requestModule (Proxy @PromptModule) proc.shellConfig.modules
+displayPrompt' proc = mapM_ (`displayPrompt` proc) $ requestModule (Proxy @Prompt) proc.shellConfig.modules
 
 
 data TextComponent = TextComponent (IO T.Text, Colorscheme -> T.Text)

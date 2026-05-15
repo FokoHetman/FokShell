@@ -198,7 +198,11 @@ instance Node' ProcessCall where
       findCurrent (x:xs) c = bool (0, c) (first (1 +) $ findCurrent xs ( c - T.length x)) (T.length x < c)
 
 pcallParser :: Parser Node -> Parser ProcessCall
-pcallParser lower = ProcessCall <$> (ws *> lower <* ws) <*> (many (ws *> lower <* ws))
+pcallParser lower = ProcessCall <$> (ws *> n <* ws) <*> (many (ws *> n <* ws))
+  where n = {-(Node <$> nestedPcallParser lower) <|> -} lower
+nestedPcallParser :: Parser Node -> Parser ProcessCall
+nestedPcallParser lower = stringP "$(" *> n <* charP ')'
+  where n = pcallParser lower
 -- }}}
 
 -- Array {{{
@@ -267,7 +271,7 @@ charP :: Char -> Parser Char
 charP c = satisfy (==c)
 
 specialChars :: String
-specialChars = "=:;{}<|>,!#&\\\"' "
+specialChars = "=:;{}<|>,!#&\\\"' )"
 
 isSpecial :: Char -> Bool
 isSpecial = (`elem` specialChars)
