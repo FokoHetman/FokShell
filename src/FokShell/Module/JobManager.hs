@@ -21,13 +21,11 @@ import Data.Data (Proxy(Proxy))
 data JobManager = JobManager
   {
     jobs :: [Job]
-  , preprocessors :: [Preprocessor]
   }
 
 instance Def JobManager where
   def = JobManager
     { jobs = []
-    , preprocessors = [connectPreprocessors [substituteprefix "~" (const $ T.pack <$> getHomeDirectory), envVarPreprocessor]]
     }
 
 instance Module' JobManager ShellProcess where
@@ -39,10 +37,10 @@ instance Module' JobManager ShellProcess where
           putStrLn ""
           let conf = shellConfig p
           let input' = T.strip $ input conf
-          let preprocess = connectPreprocessors tc.preprocessors
           let parser = case requestModule (Proxy @ParserModule) conf.modules of
                     (x:_) -> x
                     _ -> def
+          let preprocess = connectPreprocessors parser.preprocessors
           let task = runParser parser.parser input' <&> (>>= makeTask) . preprocess p . snd
           (job, p') <- case task of
             Just t' -> t' >>= \t -> do

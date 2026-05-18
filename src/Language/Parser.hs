@@ -40,7 +40,7 @@ class Node' a where
   nodeToText' :: a -> T.Text
   modifyNode' :: a -> (Node -> Node) -> Node
   makeTask'   :: a -> IO Task
-  getRawData' :: a -> Int -> ({- most primitive node the cursor is on -} Node, {- all strings before the cursor, including current one -}[T.Text], {- index into the current word -} Int)
+  getRawData' :: a -> Int -> Maybe ({- most primitive node the cursor is on -} Node, {- all strings before the cursor, including current one -}[T.Text], {- index into the current word -} Int)
 
 data Node where
   Node :: (Node' a,Typeable a) => a -> Node
@@ -56,7 +56,7 @@ nodeToText (Node a) = nodeToText' a
 modifyNode :: Node -> (Node -> Node) -> Node
 modifyNode (Node a) = modifyNode' a
 
-getRawData :: Node -> Int -> (Node, [T.Text], Int)
+getRawData :: Node -> Int -> Maybe (Node, [T.Text], Int)
 getRawData (Node a) = getRawData' a
 
 
@@ -190,12 +190,14 @@ instance Node' ProcessCall where
     -- | given exit code of prevTask determines whether this task should run
     , condition = const True
     }
-  getRawData' (ProcessCall e args) c = (Node (ProcessCall e args), l, index)
+  getRawData' (ProcessCall e args) c = case current of
+    Just (currentI, index) -> Just (Node (ProcessCall e args), take (currentI+1) l, index)
+    Nothing -> Nothing
     where
       l = fmap nodeToText $ e:args
-      (currentI, index) = findCurrent l c
-      findCurrent [_] c = (0, c)
-      findCurrent (x:xs) c = bool (0, c) (first (1 +) $ findCurrent xs ( c - T.length x)) (T.length x < c)
+      current = findCurrent l c
+      findCurrent [x] c = bool (Just (0, c)) Nothing $ T.length x < c
+      findCurrent (x:xs) c = bool (Just (0, c)) (first (1 +) <$> findCurrent xs ( c - T.length x)) (T.length x < c)
 
 pcallParser :: Parser Node -> Parser ProcessCall
 pcallParser lower = ProcessCall <$> (ws *> n <* ws) <*> (many (ws *> n <* ws))
@@ -215,7 +217,7 @@ instance Node' ArrayExp where
   makeTask' (ArrayExp n) = undefined
   getRawData' (ArrayExp ns) c = f (c-1) $ ns
     where
-    f :: Int -> [Node] -> (Node, [T.Text], Int)
+    f :: Int -> [Node] -> Maybe (Node, [T.Text], Int)
     f _ [] = undefined
     f i [n] = (getRawData n i)
     f i (n:xs) = bool
@@ -240,7 +242,7 @@ instance Node' Primitive where
   nodeToText' (NodeString t _) = t
   modifyNode' n f = f (Node n)
   makeTask' _ = error "don't"
-  getRawData' (NodeString t q) c = (Node $ NodeString t q, [t], bool (c-1) c $ q==None)
+  getRawData' (NodeString t q) c = Just (Node $ NodeString t q, [t], bool (c-1) c $ q==None)
 
 nodestringParser :: Parser Primitive
 nodestringParser = uncurry NodeString <$> nodestringP

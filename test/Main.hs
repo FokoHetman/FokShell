@@ -12,6 +12,7 @@ import FokShell.Module.Cursor
 import FokShell.Module.DirectoryTracker
 import FokShell.Module.History
 import FokShell.Module.JobManager
+import FokShell.Module.Parser
 import FokShell.Module.Preprocessor
 import FokShell.Module.Preprocessor.StringPreprocessors
 import FokShell.Module.Prompt
@@ -135,8 +136,8 @@ main = fokshell $ def
       , Module (def :: History)
       , Module JobManager 
         { jobs = []
-        , preprocessors = [connectPreprocessors [substituteprefix "~" (const $ T.pack <$> getHomeDirectory), envVarPreprocessor]]
         }
+      , Module (def :: ParserModule)
       , Module myPrompt
       ]
     }
