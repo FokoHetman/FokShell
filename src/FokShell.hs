@@ -103,7 +103,7 @@ parseEvent proc' key = do
             (x:xs) -> displaySuggestions (x:xs) $> proc {shellConfig = conf {tabMode = Selection, tabSuggestions = x:xs, tabIndex = 0}}
           ) . fst) (T.null (curWord conf) && T.length (curWord conf) - curWordI conf == 0)-}
 
-      (KeyModifiers 4 {-control-}, Arrow d) -> case d of
+      {-(KeyModifiers 4 {-control-}, Arrow d) -> case d of
           DLeft   -> moveCursor' conf DLeft (n DLeft) $> proc {shellConfig = conf {cursorLoc = cursorLoc conf + n DLeft}}
           DRight  -> moveCursor' conf DRight (n DRight) $> proc {shellConfig = conf {cursorLoc = cursorLoc conf - n DRight}}
           _ -> pure proc
@@ -114,7 +114,7 @@ parseEvent proc' key = do
           n DRight = case reverse $ T.words (fst $  T.splitAt (cursorLoc conf) $ T.reverse $ input conf) of
             (x:_)   -> T.length x 
             _       -> 0
-          n _ = error "this should NEVER happen."
+          n _ = error "this should NEVER happen."-}
     
       (KeyModifiers 0, Backspace) -> moveCursor' conf DLeft 1 >> redrawFromCursor nconf $> proc {shellConfig = nconf}
         where

@@ -68,10 +68,12 @@ library
                     , FokShell.Module.DirectoryTracker
                     , FokShell.Module.History
                     , FokShell.Module.JobManager
+                    , FokShell.Module.Movements
                     , FokShell.Module.Parser
                     , FokShell.Module.Preprocessor
                     , FokShell.Module.Preprocessor.StringPreprocessors
                     , FokShell.Module.Prompt
+                    , FokShell.Module.Renderer
                     , FokShell.Module.TabCompletion
                     , Lib.Primitive
                     , Lib.Format

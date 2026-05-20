@@ -19,13 +19,14 @@ data ParserModule = ParserModule
 
 instance Def ParserModule where
   def = ParserModule
-    { parser = r3
+    { parser = r4
     , preprocessors = [connectPreprocessors [substituteprefix "~" (const $ T.pack <$> getHomeDirectory), envVarPreprocessor]]
     }
 r0 = primitives empty
 r1 = pcall r0 <|> r0
 r2 = pipes r1 <|> r1
 r3 = chains r2 <|> r2
+r4 = {-detach r3 <|> -}r3
 
 instance Module' ParserModule ShellProcess where
   initHook' tc p = pure (tc,p)
@@ -34,8 +35,9 @@ instance Module' ParserModule ShellProcess where
   preHook' tc p _ = pure (True,(tc,p))
   postHook' tc p _ = pure (True,(tc,p))
 
-primitives, pcall, pipes, chains :: Parser Node -> Parser Node
+primitives, pcall, pipes, chains, detach :: Parser Node -> Parser Node
 primitives lower = Node <$> (parse lower :: Parser Primitive)
 pcall lower = Node <$> (parse lower :: Parser ProcessCall)
 pipes lower = Node <$> (parse lower :: Parser PipelineExp)
 chains lower = Node <$> (parse lower :: Parser ChainExp)
+detach lower = Node <$> (parse lower :: Parser Detach)

@@ -1,7 +1,6 @@
 {-# LANGUAGE LambdaCase, OverloadedStrings #-}
 module FokShell.Module.TabCompletion where
 import FokShell.Module
-import FokShell.Module.History
 
 import Lib.Keys
 
@@ -12,7 +11,6 @@ import FokShell.Types
 import Lib.Primitive
 import Data.Maybe (fromMaybe)
 import Data.Dynamic (fromDynamic)
-import Data.Map qualified as Map
 import Lib.Format
 import System.IO
 
@@ -21,10 +19,8 @@ import Data.Bool (bool)
 import Control.Monad (when, filterM)
 
 import Data.Proxy
-import Control.Arrow (Arrow(first))
-import System.Directory (getDirectoryContents, getPermissions, Permissions (readable), doesDirectoryExist, pathIsSymbolicLink)
+import System.Directory (getDirectoryContents, getPermissions, Permissions (readable), doesDirectoryExist)
 import System.FilePath.Posix ((</>), takeDirectory)
-import Debug.Trace (traceShow)
 import Data.List (sort)
 import FokShell.Module.Parser
 import System.Posix (isDirectory, getFileStatus)

@@ -13,11 +13,9 @@ import FokShell.Module.Preprocessor
 import Control.Concurrent (newEmptyMVar)
 import FokShell.Module.Prompt (displayPrompt')
 import Lib.Primitive
-import FokShell.Module.Preprocessor.StringPreprocessors
-import System.Directory (getHomeDirectory)
-import FokShell.Module.Preprocessor (connectPreprocessors)
 import FokShell.Module.Parser
 import Data.Data (Proxy(Proxy))
+import Data.Maybe (fromJust)
 data JobManager = JobManager
   {
     jobs :: [Job]
@@ -45,7 +43,7 @@ instance Module' JobManager ShellProcess where
           (job, p') <- case task of
             Just t' -> t' >>= \t -> do
               mvar <- newEmptyMVar
-              let job = Job t mvar
+              let job = Job t mvar []
               p' <- spawnJob (p {shellConfig = conf { input="", cursorLoc=0 }}) job
               pure (Just job, p')
             Nothing -> pure (Nothing, p {shellConfig = conf {input="",cursorLoc=0}})

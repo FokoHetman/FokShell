@@ -1,26 +1,21 @@
 {-# LANGUAGE LambdaCase, GADTs, OverloadedStrings #-}
 module Language.Parser where
 
-import Data.Map qualified as Map
 import Data.Text qualified as T
 import Control.Applicative
 import Data.Char (isSpace)
 import Data.Tuple (swap)
 import Data.Bool (bool)
-import Data.Functor
-import System.Directory
-import System.FilePath
-import Control.Monad (filterM, join)
 import Debug.Trace (traceShow)
-import Data.Bifunctor (Bifunctor(bimap, first))
+import Data.Bifunctor (Bifunctor(first))
 import Data.Data (Typeable, Proxy, cast)
 import GHC.IO.Exception (ExitCode (ExitSuccess))
 import System.IO (IOMode (WriteMode, AppendMode))
 import GHC.IO.Handle
-import Control.Concurrent (MVar, readMVar, putMVar, isEmptyMVar, newEmptyMVar)
+import Control.Concurrent (MVar, newEmptyMVar, newMVar)
 import Data.Maybe (isJust, fromJust)
 
-import Data.Map qualified as Map
+import System.Process (createPipe)
 
 data TaskPipeType = File FilePath IOMode | Terminal | ProcessData (MVar (Either Node Handle))
 
@@ -32,7 +27,18 @@ data Task = Task {
 , pipeErr     :: TaskPipeType
 , prevTask    :: Maybe Task
 , condition   :: ExitCode -> Bool
+, attach      :: Bool
 }
+
+attachPrev :: Task -> Task -> Task
+attachPrev prev t =
+  case prevTask t of
+    Nothing ->
+      t { prevTask = Just prev }
+
+    Just p ->
+      t { prevTask = Just (attachPrev prev p) }
+
 
 class Node' a where
   parse       :: Parser Node -> Parser a
@@ -90,9 +96,33 @@ instance Monad Parser where
     (rest, a) <- pa input
     runParser (f a) rest
 
+-- Detach {{{
+data Detach = Detach Node
+instance Node' Detach where
+  parse lower = Detach <$> lower <* charP '&'
+  nodeLen' (Detach n) = nodeLen n + 1
+  nodeToText' (Detach n) = nodeToText n <> "&"
+  modifyNode' (Detach n) f = f $ Node $ Detach $ f n
+  makeTask' (Detach n) = do
+    t <- makeTask n
+    (_inread, inwrite) <- createPipe
+    (_outread, outwrite) <- createPipe
+    (_errread, errwrite) <- createPipe
+    inh <- ProcessData <$> newMVar (Right inwrite)
+    outh <- ProcessData <$> newMVar (Right outwrite)
+    errh <- ProcessData <$> newMVar (Right errwrite)
+    pure t {attach = False, pipeIn = inh, pipeOut = outh, pipeErr = errh {-, process = Just Process {procInh = Just inread, procOuth = Just outread, procErrh = Just errread, pid = Nothing, procHandle = Nothing} -} }
+  getRawData' (Detach n) = getRawData n
+-- }}}
 
 -- Chain {{{
 data ChainType = Sequence | OnSuccess | OnFailure
+
+instance Show ChainType where
+  show Sequence = ";"
+  show OnSuccess = "&&"
+  show OnFailure = "||"
+
 chainLen :: ChainType -> Int
 chainLen Sequence = 1
 chainLen OnSuccess = 2
@@ -102,14 +132,14 @@ data ChainExp = ChainExp ChainType Node Node
 instance Node' ChainExp where
   parse = chainParser
   nodeLen' (ChainExp t left right) = nodeLen left + nodeLen right + chainLen t
-  nodeToText' = undefined
+  nodeToText' (ChainExp t n1 n2) = nodeToText n1 <> T.show t <> nodeToText n2
   modifyNode' (ChainExp t left right) f = f (Node $ ChainExp t (modifyNode left f) $ modifyNode right f)
   makeTask' (ChainExp t left right) = do
     n2' <- makeTask right
     n1' <- makeTask left
-    pure n2'
-     {prevTask = Just n1'
-    , condition = case t of
+    pure (attachPrev n1' n2')
+     {
+      condition = case t of
       OnSuccess -> (==ExitSuccess)
       OnFailure -> (/=ExitSuccess)
       Sequence -> const True
@@ -145,7 +175,7 @@ instance Node' PipelineExp where
       n2' <- makeTask n2
       n1' <- makeTask n1
       ref2 <- newEmptyMVar
-      pure n2' {pipeIn = ProcessData ref2, prevTask = Just $ n1' {pipeOut = ProcessData ref2}}
+      pure (attachPrev n1' {pipeOut = ProcessData ref2} n2'{pipeIn = ProcessData ref2})
     Write Stdout -> mkFilePipe n1 n2 Stdout WriteMode
     Write Stderr -> mkFilePipe n1 n2 Stderr WriteMode
     Append Stdout -> mkFilePipe n1 n2 Stdout AppendMode
@@ -178,7 +208,7 @@ data ProcessCall = ProcessCall Node [Node]
 instance Node' ProcessCall where
   parse  = pcallParser
   nodeLen' (ProcessCall n ns) = nodeLen n + sum (fmap nodeLen ns)
-  nodeToText' _ = undefined
+  nodeToText' (ProcessCall e a) = nodeToText e <> T.concat (fmap nodeToText a)
   modifyNode' (ProcessCall n ns) f = f (Node $ ProcessCall (modifyNode n f) $ fmap (`modifyNode` f) ns)
   makeTask' (ProcessCall e args) = pure Task 
     { procName = nodeToText e
@@ -189,6 +219,7 @@ instance Node' ProcessCall where
     , prevTask = Nothing
     -- | given exit code of prevTask determines whether this task should run
     , condition = const True
+    , attach = True
     }
   getRawData' (ProcessCall e args) c = case current of
     Just (currentI, index) -> Just (Node (ProcessCall e args), take (currentI+1) l, index)

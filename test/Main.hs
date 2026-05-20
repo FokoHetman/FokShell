@@ -12,6 +12,7 @@ import FokShell.Module.Cursor
 import FokShell.Module.DirectoryTracker
 import FokShell.Module.History
 import FokShell.Module.JobManager
+import FokShell.Module.Movements
 import FokShell.Module.Parser
 import FokShell.Module.Preprocessor
 import FokShell.Module.Preprocessor.StringPreprocessors
@@ -118,11 +119,13 @@ redraw proc@ShellProcess{shellConfig = c} = clear >> rPrompt >> dinput >> updCur
 main :: IO ()
 main = fokshell $ def
     { binds = def ++ [
+    ((alt, Character "h"), \proc -> print "h" $> proc)
       {-((control, Character "t"), \proc -> 
         let config = shellConfig proc in let conf = config {colorScheme = nextColorScheme (colorScheme config)} in redraw conf $> proc {shellConfig = conf})-}
       ]
     , modules =
       [ Module (def :: DirectoryTracker)
+      , Module (def :: Movements)
       , Module myCursor
       , Module ColorschemeModule 
         { colorschemes = colorSchemes

@@ -23,16 +23,17 @@ import System.IO.Error (ioeGetErrorType, ioeGetErrorString, ioeGetFileName)
 import FokShell.Module (ModuleContainer)
 
 data Process = Process {
-  pid       :: Pid
-, procHandle:: ProcessHandle
-, procOuth  :: Handle
-, procErrh  :: Handle
-, procInh   :: Handle
+  pid       :: Maybe Pid
+, procHandle:: Maybe ProcessHandle
+, procOuth  :: Maybe Handle
+, procErrh  :: Maybe Handle
+, procInh   :: Maybe Handle
 }
 
 data Job = Job {
   task :: Task
 , exitCode :: MVar ExitCode
+, processes :: [Process]
 }
 data State = InputOutput
 data ShellProcess = ShellProcess {
@@ -64,23 +65,23 @@ forward read write = do
       forward read write
     Nothing -> pure ()
 
-handleProcessException :: ShellProcess -> IOError -> IO (ExitCode, ShellProcess)
+{-handleProcessException :: ShellProcess -> IOError -> IO (Process, ShellProcess)
 handleProcessException proc' e = do
   traceIO $ fromMaybe "" ((<>": ") <$> ioeGetFileName e) <> ioeGetErrorString e
   let ecode = case ioeGetErrorType e of
             NoSuchThing      -> ExitFailure 127
             PermissionDenied -> ExitFailure 126
             _                -> ExitFailure 1
-  pure (ecode, proc')
-executeTask :: ShellProcess -> Task -> IO (ExitCode, ShellProcess)
+  pure (ecode, proc')-}
+executeTask :: ShellProcess -> Task -> IO (Process, ShellProcess)
 executeTask proc' t = do
   let name = t.procName
   let args = t.procArgs
   let builtins = proc'.shellConfig.builtins
   case lookup name builtins of
-    Just x  -> x args (t.pipeIn, t.pipeOut, t.pipeErr) proc'
+    Just x  -> undefined --x args (t.pipeIn, t.pipeOut, t.pipeErr) proc'
     Nothing -> do
-      (`catch` handleProcessException proc') $ do
+      --(`catch` handleProcessException proc') $ do
         outPipe <- getPipe t.pipeOut
         errPipe <- getPipe t.pipeErr
         inPipe <- getPipe t.pipeIn
@@ -103,7 +104,8 @@ executeTask proc' t = do
               _ -> pure ()
           _ -> pure ()
         exitCode <- waitForProcess proch
-        pure (exitCode, proc')
+        pid <- getPid proch
+        pure (Process {pid = pid, procHandle = Just proch, procInh = inh, procOuth = outh, procErrh = errh}, proc')
   where
     getPipe :: TaskPipeType -> IO StdStream
     getPipe (ProcessData ref) = isEmptyMVar ref >>= bool (readMVar ref <&> \case
