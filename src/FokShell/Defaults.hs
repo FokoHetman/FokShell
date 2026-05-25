@@ -3,18 +3,14 @@ module FokShell.Defaults where
 import Lib.Primitive
 import FokShell.Module
 import FokShell.Types
-import Language.Parser
+import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Text.IO qualified as T
-import Data.Functor
 import Lib.Keys
 import FokShell.Module.JobManager
 import FokShell.Module.TabCompletion
 import FokShell.Module.Prompt
-import System.Directory (getHomeDirectory)
-import FokShell.Module.Preprocessor.StringPreprocessors (substituter, envVarPreprocessor)
-import Data.List (sort)
-import FokShell.Module.History (withHomeDir, historyFile, History)
+import FokShell.Module.History (History)
 import System.Exit (exitSuccess)
 
 import FokShell.Builtin
@@ -24,15 +20,16 @@ import GHC.IO.Handle (hFlush)
 import System.IO (stdout)
 import FokShell.Module.Parser (ParserModule)
 import FokShell.Module.DirectoryTracker (DirectoryTracker)
+import Control.Concurrent.STM (STM, modifyTVar, atomically, readTVarIO)
 
-instance Def [Module ShellProcess] where
+instance Def [Module ShellConfig] where
   def =
-    [ Module (def :: DirectoryTracker)
-    , Module (def :: Prompt)
-    , Module (def :: TabCompletion)
-    , Module (def :: History)
-    , Module (def :: JobManager)
-    , Module (def :: ParserModule)
+    [ {-module' (def :: DirectoryTracker)
+    , module' (def :: Prompt)
+    , module' (def :: TabCompletion)
+    , module' (def :: History)
+    , module' (def :: JobManager)
+    , module' (def :: ParserModule)-}
     ]
 
 instance Def [CompletionRule] where
@@ -42,25 +39,32 @@ instance Def [CompletionRule] where
     , fileListCompletion (const $ pure True) "cat"
     ]
 
-instance Def [Builtin] where
-  def = [
-      cd
-    , regex
+instance Def (Map.Map T.Text Builtin) where
+  def = Map.fromList $ [
+      ("cd", cd)
+    , ("regex", regex)
     ]
 
 
 
 haltAction :: Action
 haltAction proc = do
-  p <- chainHook proc resetHook
-  putStrLn "^C" >> displayPrompt' proc $> p {shellConfig = p.shellConfig {input = "",cursorLoc=0}}
+  chainHook proc resetHook
+  putStrLn "^C"
+  displayPrompt' =<< readTVarIO proc
+  atomically . modifyTVar proc $ \p -> p {input = "",cursorLoc=0}
 
 exitAction :: Action
 exitAction p = Module.chainHook p Module.exitHook >> exitSuccess
 
 
 clearAction :: Action
-clearAction proc = putStrLn "\ESC[2J\ESC[H" *> displayPrompt' proc >> T.putStr proc.shellConfig.input >> hFlush stdout $> proc
+clearAction proc = do
+  putStrLn "\ESC[2J\ESC[H"
+  proc' <- readTVarIO proc
+  displayPrompt' proc'
+  T.putStr proc'.input
+  hFlush stdout
 
 instance Def [(KeyEvent, Action)] where
   def = [

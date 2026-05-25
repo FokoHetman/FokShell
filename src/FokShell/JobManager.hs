@@ -1,28 +1,45 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, LambdaCase #-}
 module FokShell.JobManager where
 import FokShell.Types
-import FokShell.Utils
-import Data.Text qualified as T
 
-import GHC.IO.Exception (ExitCode)
+import Data.Functor
 import Data.Bool (bool)
-import Control.Concurrent (putMVar, newEmptyMVar)
 import Language.Parser
-import Control.Arrow (Arrow(first))
 import Data.List (singleton)
+import Control.Concurrent.STM
+import Control.Concurrent.Async (wait)
+spawnJob :: Job -> TVar ShellConfig -> IO Job
+spawnJob job conf = do
+  processes <- spawnTask conf job.task (job.inh, job.outh, job.errh)
+  pure job {processes = processes}
 
-spawnJob :: ShellProcess -> Job -> IO ShellProcess
-spawnJob proc job = do
-  (exitCode, proc') <- spawnTask proc job.task
-  putMVar job.exitCode exitCode
-  pure proc'
+replaceTerminalPipes :: Task -> (TaskPipeType, TaskPipeType, TaskPipeType) -> Task
+replaceTerminalPipes t (inh, outh, errh) = t 
+  { prevTask = case t.prevTask of
+      Just x -> Just $ replaceTerminalPipes x (inh, outh, errh)
+      Nothing -> Nothing
+  , pipeIn = case t.pipeIn of
+      Terminal -> inh
+      _ -> t.pipeIn
+  , pipeOut = case t.pipeOut of
+      Terminal -> outh
+      _ -> t.pipeOut
+  , pipeErr = case t.pipeErr of
+      Terminal -> errh
+      _ -> t.pipeErr
+  }
 
-spawnTask :: ShellProcess -> Task -> IO ([Process], ShellProcess)
-spawnTask proc t = case t.prevTask of
-  Nothing -> first singleton <$> executeTask proc t
-  Just x -> do
-    (process, nproc) <- spawnTask proc x
+spawnTask :: TVar ShellConfig -> Task -> (TaskPipeType, TaskPipeType, TaskPipeType) -> IO [Process]
+spawnTask conf t handles = case t.prevTask of
+  Nothing -> singleton <$> executeTask conf t
+  Just t' -> do
+    process <- spawnTask conf (replaceTerminalPipes t' handles) handles
     bool
-      (pure (process, nproc))
-      (first singleton <$> executeTask nproc t)
-      (t.condition exitCode)
+      (pure process)
+      (singleton <$> executeTask conf t)
+      =<< (case t.condition of
+        Just x -> case reverse process of
+          (p:_) -> wait p.exitCode <&> x
+          _ -> pure True
+        Nothing -> pure True
+      )

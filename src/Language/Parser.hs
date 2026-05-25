@@ -26,7 +26,7 @@ data Task = Task {
 , pipeOut     :: TaskPipeType
 , pipeErr     :: TaskPipeType
 , prevTask    :: Maybe Task
-, condition   :: ExitCode -> Bool
+, condition   :: Maybe (ExitCode -> Bool)
 , attach      :: Bool
 }
 
@@ -68,6 +68,10 @@ getRawData (Node a) = getRawData' a
 
 withProxyNode :: forall i. Typeable i => Proxy i -> Node -> Maybe i
 withProxyNode _ (Node a) = cast a
+
+withTypeNode :: forall i. Typeable i => Node -> Maybe i
+withTypeNode (Node a) = cast a
+
 requestNode :: forall a. (Node' a,Typeable a) => Proxy a -> [Node] -> [a]
 requestNode p xs = fmap fromJust $ filter isJust $ fmap (withProxyNode p) xs
 
@@ -105,13 +109,13 @@ instance Node' Detach where
   modifyNode' (Detach n) f = f $ Node $ Detach $ f n
   makeTask' (Detach n) = do
     t <- makeTask n
-    (_inread, inwrite) <- createPipe
+    (inread, _inwrite) <- createPipe
     (_outread, outwrite) <- createPipe
     (_errread, errwrite) <- createPipe
-    inh <- ProcessData <$> newMVar (Right inwrite)
+    inh <- ProcessData <$> newMVar (Right inread)
     outh <- ProcessData <$> newMVar (Right outwrite)
     errh <- ProcessData <$> newMVar (Right errwrite)
-    pure t {attach = False, pipeIn = inh, pipeOut = outh, pipeErr = errh {-, process = Just Process {procInh = Just inread, procOuth = Just outread, procErrh = Just errread, pid = Nothing, procHandle = Nothing} -} }
+    pure t {attach = False, pipeIn = inh, pipeOut = outh, pipeErr = errh}
   getRawData' (Detach n) = getRawData n
 -- }}}
 
@@ -140,9 +144,9 @@ instance Node' ChainExp where
     pure (attachPrev n1' n2')
      {
       condition = case t of
-      OnSuccess -> (==ExitSuccess)
-      OnFailure -> (/=ExitSuccess)
-      Sequence -> const True
+      OnSuccess -> Just (==ExitSuccess)
+      OnFailure -> Just (/=ExitSuccess)
+      Sequence -> Nothing
     }
   getRawData' (ChainExp t left right) c = bool (getRawData left c) (getRawData right (c - nodeLen left - chainLen t)) (c > nodeLen left)
 
@@ -218,7 +222,7 @@ instance Node' ProcessCall where
     , pipeErr = Terminal
     , prevTask = Nothing
     -- | given exit code of prevTask determines whether this task should run
-    , condition = const True
+    , condition = Nothing
     , attach = True
     }
   getRawData' (ProcessCall e args) c = case current of
@@ -236,6 +240,17 @@ pcallParser lower = ProcessCall <$> (ws *> n <* ws) <*> (many (ws *> n <* ws))
 nestedPcallParser :: Parser Node -> Parser ProcessCall
 nestedPcallParser lower = stringP "$(" *> n <* charP ')'
   where n = pcallParser lower
+-- }}}
+
+-- Table {{{
+data TableExp = TableExp [[Node]]
+instance Node' TableExp where
+  parse = const empty
+  nodeLen' (TableExp n) = undefined
+  nodeToText' (TableExp n) = undefined --"{" <> T.intercalate "," (fmap nodeToText n) <> "}"
+  modifyNode' (TableExp n) f = undefined --f $ Node $ TableExp $ f <$> n
+  makeTask' (TableExp n) = undefined
+  getRawData' (TableExp ns) c = undefined
 -- }}}
 
 -- Array {{{

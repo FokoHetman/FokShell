@@ -6,7 +6,7 @@ import Lib.Primitive
 import Control.Applicative
 import Data.Text qualified as T
 
-import FokShell.Types (ShellProcess)
+import FokShell.Types (ShellConfig)
 import FokShell.Module
 import FokShell.Module.Preprocessor
 import FokShell.Module.Preprocessor.StringPreprocessors
@@ -22,18 +22,19 @@ instance Def ParserModule where
     { parser = r4
     , preprocessors = [connectPreprocessors [substituteprefix "~" (const $ T.pack <$> getHomeDirectory), envVarPreprocessor]]
     }
+r0,r1,r2,r3,r4 :: Parser Node
 r0 = primitives empty
 r1 = pcall r0 <|> r0
 r2 = pipes r1 <|> r1
 r3 = chains r2 <|> r2
-r4 = {-detach r3 <|> -}r3
+r4 = detach r3 <|> r3
 
-instance Module' ParserModule ShellProcess where
-  initHook' tc p = pure (tc,p)
-  exitHook' tc p = pure (tc,p)
-  resetHook' tc p = pure (tc,p)
-  preHook' tc p _ = pure (True,(tc,p))
-  postHook' tc p _ = pure (True,(tc,p))
+instance Module' ParserModule ShellConfig where
+  initHook' _ _ = pure ()
+  exitHook' _ _ = pure ()
+  resetHook' _ _ = pure ()
+  preHook' _ _ _ = pure True
+  postHook' _ _ _ = pure True
 
 primitives, pcall, pipes, chains, detach :: Parser Node -> Parser Node
 primitives lower = Node <$> (parse lower :: Parser Primitive)

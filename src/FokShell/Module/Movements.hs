@@ -10,6 +10,7 @@ import FokShell.Utils (moveCursor')
 import Data.Functor
 import Data.Text qualified as T
 import Data.Char (isSpace)
+import Control.Concurrent.STM
 
 data Movements = Movements
   {
@@ -19,30 +20,28 @@ instance Def Movements where
   def = Movements
     { jumpMod = Just control
     }
-instance Module' Movements ShellProcess where
-  initHook' tc p = pure (tc,p)
-  resetHook' tc p = pure (tc,p)
-  exitHook' tc p = pure (tc,p)
-  preHook' tc p (modf,Arrow d) = (\x -> bool (pure (True,(tc,p))) x $ d `elem` [DLeft, DRight]) $ 
-    bool 
-    (pure (True,(tc,p)))
-    (moveCursor' p.shellConfig d (abs $ n d)
-        $> (True, (tc,p {shellConfig =
-          p.shellConfig {cursorLoc = p.shellConfig.cursorLoc + n d}})))
-    (Just modf == tc.jumpMod)
+instance Module' Movements ShellConfig where
+  initHook' _tc _p = pure ()
+  resetHook' _tc _p = pure ()
+  exitHook' _tc _p = pure ()
+  preHook' tc conf (modf,Arrow d) = do
+    config <- readTVarIO conf
+    tc' <- readTVarIO tc
+    let cursor = T.length config.input - config.cursorLoc
+        (left,right) = T.splitAt cursor config.input
+    let ret = bool (pure True) (moveCursor' conf d (abs $ n left right d) $> True) (Just modf == tc'.jumpMod)
+    bool (pure True) ret $ d `elem` [DLeft, DRight]
     where
-      cursor = T.length p.shellConfig.input - p.shellConfig.cursorLoc
-      (left, right) = T.splitAt cursor p.shellConfig.input
-      n DLeft = case T.takeWhileEnd isSpace left of
+      n left _ DLeft = case T.takeWhileEnd isSpace left of
         "" ->  case reverse $ T.words left of
           (x:_) -> T.length x
           _ -> 0
         x -> T.length x
-      n DRight = case T.takeWhile isSpace right of
+      n _ right DRight = case T.takeWhile isSpace right of
         "" -> case T.words right of
           (x:_) -> -T.length x
           _ -> 0
         x -> -T.length x
-      n _ = undefined
-  preHook' tc p _ = pure (True, (tc,p))
-  postHook' tc p _ = pure (True,(tc,p))
+      n _ _ _ = undefined
+  preHook' _tc _p _ = pure True
+  postHook' _tc _p _ = pure True

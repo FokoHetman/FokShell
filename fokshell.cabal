@@ -51,7 +51,7 @@ extra-doc-files:    CHANGELOG.md
 -- extra-source-files:
 
 common warnings
-    ghc-options: -Wall
+    ghc-options: -Wall -threaded
 
 library
     -- Import common warning flags.
@@ -102,6 +102,9 @@ library
                     , regex-tdfa
                     , bytestring
                     , formatting
+                    , async
+                    , stm
+                    , array
 
     -- Directories containing source files.
     hs-source-dirs:   src
@@ -153,4 +156,5 @@ executable hetmanshell
         , hostname
         , fokshell
         , directory
+        , stm
 

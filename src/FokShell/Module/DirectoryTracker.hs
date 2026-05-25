@@ -12,6 +12,9 @@ import FokShell.Module.Parser
 import FokShell.Module.Preprocessor.StringPreprocessors (substituteprefix)
 import FokShell.Module.Preprocessor (Preprocessor)
 import Lib.Primitive
+import Control.Concurrent.STM
+import Control.Concurrent.STM (readTVarIO)
+import Control.Monad (when)
 
 data DirectoryTracker = DirectoryTracker
   {
@@ -28,19 +31,25 @@ instance Def DirectoryTracker where
 directoryPreprocessor :: Preprocessor
 directoryPreprocessor = substituteprefix "-" (\p -> T.pack <$> getPrev p)
 
-getPrev :: ShellProcess -> IO FilePath
-getPrev p = case requestModule (Proxy @DirectoryTracker) p.shellConfig.modules of
-  (x:_) -> case head' =<< tail' x.directories of
-    Just x' -> pure x'
-    Nothing -> getCurrentDirectory
+getPrev :: ShellConfig -> IO FilePath
+getPrev p = case requestModule @DirectoryTracker p.modules of
+  (x':_) -> do
+    x <- readTVarIO x'
+    case head' =<< tail' x.directories of
+      Just x' -> pure x'
+      Nothing -> getCurrentDirectory
   _ -> getCurrentDirectory
 
-instance Module' DirectoryTracker ShellProcess where
-  initHook' tc p = do
-      let new_p = bool p (modifyModule' (Proxy @ParserModule) p (\mgr -> mgr {preprocessors = directoryPreprocessor:mgr.preprocessors})) tc.addPreprocessor
+instance Module' DirectoryTracker ShellConfig where
+  initHook' tc conf = do
+      conf' <- readTVarIO conf
+      tc'   <- readTVarIO tc
+      --let new_p = bool p (modifyModule' (Proxy @ParserModule) p (\mgr -> mgr {preprocessors = directoryPreprocessor:mgr.preprocessors}))
+      when tc'.addPreprocessor $ do
+        mapM_ (atomically . (`modifyTVar` \pm -> pm {preprocessors = directoryPreprocessor:pm.preprocessors})) (requestModule @ParserModule conf'.modules)
       currentDir <- getCurrentDirectory
-      pure (tc {directories = currentDir:tc.directories},new_p)
-  exitHook' tc p = pure (tc,p)
-  resetHook' tc p = pure (tc,p)
-  preHook' tc p _ = pure (True, (tc,p))
-  postHook' tc p _ = pure (True, (tc,p))
+      atomically . modifyTVar tc $ \tc' -> tc' {directories=currentDir:tc'.directories}
+  exitHook' tc p = pure ()
+  resetHook' tc p = pure ()
+  preHook' tc p _ = pure True
+  postHook' tc p _ = pure True

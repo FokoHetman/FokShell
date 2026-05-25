@@ -3,10 +3,11 @@ import Lib.Primitive
 import FokShell.Module.Colorscheme
 import GHC.IO.Handle (hFlush)
 import System.IO (stdout)
-import FokShell.Types (ShellProcess)
+import FokShell.Types (ShellConfig)
 import FokShell.Module
 
 import Data.Functor
+import Control.Concurrent.STM (readTVarIO)
 
 data Cursor = Cursor
   {
@@ -16,12 +17,12 @@ data Cursor = Cursor
 instance Def Cursor where
   def = Cursor { shape = BlinkingBar, color = RGB 255 255 255 }
 
-instance Module' Cursor ShellProcess where
-  initHook' tc p = mkCursor tc $> (tc, p)
-  exitHook' tc p = pure (tc,p)
-  resetHook' tc p = mkCursor tc $> (tc, p)
-  preHook' tc p _ = pure (True,(tc,p))
-  postHook' tc p _ = mkCursor tc $> (True,(tc,p))
+instance Module' Cursor ShellConfig where
+  initHook' tc _ = mkCursor =<< readTVarIO tc
+  exitHook' _ _ = pure ()
+  resetHook' tc _ = mkCursor =<< readTVarIO tc
+  preHook' _ _ _ = pure True
+  postHook' tc _ _ = (readTVarIO tc >>= mkCursor) $> True
 
 mkCursor :: Cursor -> IO ()
 mkCursor Cursor{shape,color} = putStr (show shape <> cursorColor color) >> hFlush  stdout

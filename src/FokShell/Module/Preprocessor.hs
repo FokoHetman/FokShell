@@ -1,8 +1,8 @@
 module FokShell.Module.Preprocessor where
 import Language.Parser (Node)
-import FokShell.Types (ShellProcess)
+import FokShell.Types (ShellConfig)
 
-type Preprocessor = ShellProcess -> Node -> IO Node
+type Preprocessor = ShellConfig -> Node -> IO Node
 
 connectPreprocessors :: [Preprocessor] -> Preprocessor
 connectPreprocessors [] _ n = pure n

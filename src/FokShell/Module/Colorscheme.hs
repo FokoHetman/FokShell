@@ -6,7 +6,6 @@ import qualified Data.Text as T
 import Data.List (intercalate)
 import Lib.Primitive
 import Data.Char (chr)
-import Debug.Trace (traceShow)
 
 data ColorschemeModule = ColorschemeModule
   { colorschemes  :: [Colorscheme]
@@ -19,12 +18,12 @@ instance Def ColorschemeModule where
     , current = 0
     }
 
-instance Module' ColorschemeModule ShellProcess where
-  initHook' tc p = pure (tc,p)
-  exitHook' tc p = pure (tc,p)
-  resetHook' tc p = pure (tc, p)
-  preHook' tc p e = pure (True,(tc,p))
-  postHook' tc p e = pure (True,(tc,p))
+instance Module' ColorschemeModule ShellConfig where
+  initHook' _ _ = pure ()
+  exitHook' _ _ = pure ()
+  resetHook' _ _ = pure ()
+  preHook' _ _ _ = pure True
+  postHook' _ _ _ = pure True
 
 
 data Color = RGB Int Int Int | Hex Int

@@ -25,14 +25,14 @@ import Data.List (sort)
 import FokShell.Module.Parser
 import System.Posix (isDirectory, getFileStatus)
 import FokShell.Module.Preprocessor (connectPreprocessors)
-
+import Control.Concurrent.STM
 
 data TabContextMode = Disabled | Selection deriving (Eq, Show)
 data TabCompletion = TabCompletion
   { mode        :: TabContextMode
   , selected    :: Maybe Int
   , completions :: [T.Text]
-  , sortAlgorithm   :: ShellProcess -> [T.Text] -> [T.Text]
+  , sortAlgorithm   :: ShellConfig -> [T.Text] -> [T.Text]
   , autocomplete    :: AutocompleteConfig
   , maxSuggestions  :: Int
   , shadowText      :: Bool
@@ -89,69 +89,92 @@ displayCompletions current (x:xs) selected displayed = do
                         <> moveCursorRaw DLeft (maxLen+leftLen+rightLen) <> moveCursorRaw Down 1 <> display xs ((\x -> x-1) <$> i)
 
 
-runParser' :: ShellProcess -> T.Text -> Maybe (IO Node)
-runParser' proc t = preprocess proc . snd <$> runParser parser.parser t
-  where 
-    preprocess = connectPreprocessors parser.preprocessors
-    parser = case requestModule (Proxy @ParserModule) proc.shellConfig.modules of
-      (x:_) -> x
-      _ -> def
+runParser' :: ShellConfig -> T.Text -> IO (Maybe Node)
+runParser' conf t = do
+  parser <- case requestModule @ParserModule conf.modules of
+      (x:_) -> readTVarIO x
+      _ -> pure def
+  let preprocess = connectPreprocessors parser.preprocessors
+  case runParser parser.parser t of
+    Nothing -> pure Nothing
+    Just (_, x) -> Just <$> preprocess conf x
 
 
-instance Module' TabCompletion ShellProcess where
-  initHook' tc p = pure (tc, p)
-  exitHook' tc p = pure (tc, p)
-  resetHook' tc p = cleanPrevious p.shellConfig.input >> pure (tc {mode = Disabled, selected=Nothing}, p)
-  preHook' tc p e = do
-    curWord <- case runParser' p conf.input of
-        Just n' -> do
-          n <- n'
-          pure $ fromMaybe "" $ (\(_,y,_) -> last y) <$>  getRawDataWrapped n conf.input conf.cursorLoc
+instance Module' TabCompletion ShellConfig where
+  initHook' _ _ = pure ()
+  exitHook' _ _ = pure ()
+  resetHook' tc p = do
+    p' <- readTVarIO p
+    cleanPrevious p'.input
+    atomically $ modifyTVar tc $ \tc' -> tc' {mode = Disabled, selected = Nothing}
+  preHook' tc conf e = do
+    conf' <- readTVarIO conf
+    tc' <- readTVarIO tc
+    curWord <- runParser' conf' conf'.input >>= \case
+        Just n -> do
+          pure $ fromMaybe "" $ (\(_,y,_) -> last y) <$>  getRawDataWrapped n conf'.input conf'.cursorLoc
         Nothing    -> pure ""
-    case tc.mode of
+    parser <- case requestModule @ParserModule conf'.modules of
+        (x:_) -> readTVarIO x
+        _ -> pure def
+    let curWordRaw c = case runParser parser.parser c.input >>= (\n -> getRawDataWrapped n c.input c.cursorLoc) . snd of
+          Just (_,x,_) -> last x
+          Nothing    -> ""
+        replaceCurrentIO :: T.Text -> TVar ShellConfig -> IO ()
+        replaceCurrentIO with conf = do
+          c <- readTVarIO conf
+          when (T.length (curWordRaw c) > 0) $ do
+            let t = input c
+                i = cursorLoc c
+                left = T.take (T.length t - T.length (curWordRaw c) - i) t
+                right = T.reverse $ T.take i $ T.reverse t
+                ninput = left <> with <> right
+
+            T.putStr (bool (moveCursorRaw DLeft (T.length $ curWordRaw conf')) "" (T.null (curWordRaw conf')) <> with <> right <> bool (moveCursorRaw DLeft (T.length right)) "" (T.null right))
+            hFlush stdout
+            atomically $ modifyTVar conf (\conf' -> conf' {input=ninput})
+    case tc'.mode of
       Disabled -> case e of
-        (KeyModifiers 0, Tab) -> case tc.completions of
-          [] -> pure (True, (tc,p))
-          [x] -> (False,) . (tc,) <$> replaceCurrentIO x p
+        (KeyModifiers 0, Tab) -> case tc'.completions of
+          [] -> pure True
+          [x] -> replaceCurrentIO x conf $> False
           x -> do
             let common = getCommonPrefix x
-            displayCompletions (curWordRaw conf) (tc.sortAlgorithm p x) tc.selected tc.maxSuggestions
-            (False,) <$> ((tc {mode = Selection, completions = x, selected = Just 0 {- len is at least 2 -}},) <$> replaceCurrentIO common p)
-        _ -> pure (True, (tc,p))
-      Selection -> cleanPrevious p.shellConfig.input >> case e of
-        (KeyModifiers 0, Enter) -> case tc.selected of
-          Just x -> (False,) . (tc {mode = Disabled, selected = Nothing},) <$> replaceCurrentIO (tc.completions !! x) p
-          Nothing -> pure (True, (tc {mode = Disabled, selected = Nothing},p))
-        (KeyModifiers 0, Tab) -> case tc.completions of
-          [] -> pure (True, (tc,p))
-          [x] -> (False,) . (tc,) <$> replaceCurrentIO x p
+            displayCompletions (curWordRaw conf') (tc'.sortAlgorithm conf' x) tc'.selected tc'.maxSuggestions
+            replaceCurrentIO common conf
+            atomically . modifyTVar tc $ \tc' -> tc' {mode = Selection, completions = x, selected = Just 0}
+            pure False
+            --(False,) <$> ((tc {mode = Selection, completions = x, selected = Just 0 {- len is at least 2 -}},) <$> replaceCurrentIO common p)
+        _ -> pure True
+      Selection -> cleanPrevious conf'.input >> case e of
+        (KeyModifiers 0, Enter) -> case tc'.selected of
+          Just x -> do
+            replaceCurrentIO (tc'.completions !! x) conf
+            atomically . modifyTVar tc $ \tc' -> tc' {mode = Disabled, selected = Nothing}
+            pure False
+          Nothing -> atomically (modifyTVar tc $ \tc' -> tc' {mode = Disabled, selected = Nothing}) $> True
+        (KeyModifiers 0, Tab) -> case tc'.completions of
+          [] -> pure True
+          [x] -> replaceCurrentIO x conf $> False
           x -> do
-            let sel = case tc.selected of
-                    Just a -> Just $ bool (a+1) 0 (a+1==length tc.completions)
+            let sel = case tc'.selected of
+                    Just a -> Just $ bool (a+1) 0 (a+1==length tc'.completions)
                     Nothing -> Just 0
-            displayCompletions (curWordRaw conf) (tc.sortAlgorithm p x) sel tc.maxSuggestions
-            pure (False, (tc {mode = Selection, completions = x, selected = sel}, p))
-        _ -> (tc.autocomplete.model) p tc >>= (\case
-          [] -> pure (True, (tc {selected = Nothing},p))
+            displayCompletions (curWordRaw conf') (tc'.sortAlgorithm conf' x) sel tc'.maxSuggestions
+            atomically . modifyTVar tc $ \tc' -> tc' {mode = Selection, completions = x, selected = sel}
+            pure False
+        _ -> (tc'.autocomplete.model) conf' tc' >>= (\case
+          [] -> do
+            atomically . modifyTVar tc $ \tc' -> tc' {selected = Nothing}
+            pure True --, (tc {selected = Nothing},p))
           x -> do
-            displayCompletions (curWordRaw conf) (tc.sortAlgorithm p x) Nothing tc.maxSuggestions
-            pure (True, (tc {selected = Nothing},p))
+            displayCompletions (curWordRaw conf') (tc'.sortAlgorithm conf' x) Nothing tc'.maxSuggestions
+            atomically . modifyTVar tc $ \tc' -> tc' {selected = Nothing}
+            pure True
           ) . fst
     where
-      conf = p.shellConfig
 
-      replaceCurrentIO :: T.Text -> ShellProcess -> IO ShellProcess
-      replaceCurrentIO with proc = bool
-        (pure proc)
-        (T.putStr (bool (moveCursorRaw DLeft (T.length $ curWordRaw conf)) "" (T.null (curWordRaw conf)) <> with <> right <> bool (moveCursorRaw DLeft (T.length right)) "" (T.null right))
-                >> hFlush stdout $> proc {shellConfig = replaceCurrent with conf})
-        (T.length (curWordRaw conf) > 0)
-        where
-          conf = proc.shellConfig
-          inp = conf.input
-          right = T.drop (T.length inp - conf.cursorLoc) inp
-
-      replaceCurrent :: T.Text -> ShellConfig -> ShellConfig
+      {-replaceCurrent :: T.Text -> ShellConfig -> ShellConfig
       replaceCurrent with c = c {input = ninput}
         where
         t = input c
@@ -160,35 +183,32 @@ instance Module' TabCompletion ShellProcess where
         left = T.take (T.length t - T.length (curWordRaw c) - i) t
         right = T.reverse $ T.take i $ T.reverse t
         
-        ninput =  left <> with <> right
-      curWordRaw c = case runParser parser.parser c.input >>= (\n -> getRawDataWrapped n c.input c.cursorLoc) . snd of
-        Just (_,x,_) -> last x
-        Nothing    -> ""
-      parser = case requestModule (Proxy @ParserModule) p.shellConfig.modules of
-        (x:_) -> x
-        _ -> def
+        ninput =  left <> with <> right-}
 
-  postHook' tc p _ = do
-    curWord <- case runParser' p conf.input of
-      Just n' -> do
-        n <- n'
-        pure $ fromMaybe "" $ (\(_,y,_) -> last y) <$>  getRawDataWrapped n conf.input conf.cursorLoc
+  postHook' tc conf _ = do
+    conf' <- readTVarIO conf
+    tc' <- readTVarIO tc
+    curWord <- runParser' conf' conf'.input >>= \case
+      Just n -> do
+        pure $ fromMaybe "" $ (\(_,y,_) -> last y) <$>  getRawDataWrapped n conf'.input conf'.cursorLoc
       Nothing    -> pure ""
 
-    tc.autocomplete.model p tc >>= 
-      \x -> (when (tc.mode == Selection) (cleanPrevious conf.input >> displayCompletions (curWordRaw conf) (tc.sortAlgorithm p $ fst x) tc.selected tc.maxSuggestions) 
-      $> (True, (tc {completions = tc.sortAlgorithm p $ fst x}, p)))
-    where
-      conf = p.shellConfig
-      curWordRaw c = case runParser parser.parser c.input >>= (\n -> getRawDataWrapped n c.input c.cursorLoc) . snd of
-        Just (_,x,_) -> last x
-        Nothing    -> ""
-      parser = case requestModule (Proxy @ParserModule) p.shellConfig.modules of
-        (x:_) -> x
-        _ -> def
+    parser <- case requestModule @ParserModule conf'.modules of
+      (x:_) -> readTVarIO x
+      _ -> pure def
+    let curWordRaw c = case runParser parser.parser c.input >>= (\n -> getRawDataWrapped n c.input c.cursorLoc) . snd of
+          Just (_,x,_) -> last x
+          Nothing    -> ""
 
-executablelist' :: ShellProcess -> [T.Text]
-executablelist' p = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache p) "executables" >>= \x -> lookupCache x "execs")
+    m <- tc'.autocomplete.model conf' tc'
+    when (tc'.mode == Selection) $ do
+      cleanPrevious conf'.input
+      displayCompletions (curWordRaw conf') (tc'.sortAlgorithm conf' $ fst m) tc'.selected tc'.maxSuggestions
+    pure True
+    where
+
+--executablelist' :: ShellConfig -> [T.Text]
+--executablelist' p = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache p) "executables" >>= \x -> lookupCache x "execs")
 
 countMultiple :: T.Text -> T.Text -> Int
 countMultiple w t
@@ -204,9 +224,8 @@ getRawDataWrapped n t c = getRawData n c'
     c' = T.length t - c - wsCount
 
 languageModel :: AutocompleteModel
-languageModel proc@ShellProcess{shellConfig = conf} tc = case runParser' proc input of
-  Just n' -> do
-    n <- n'
+languageModel conf tc = runParser' conf input >>= \case
+  Just n -> do
     let (node, prevArgs, curInd) = case getRawData n cursor' of
           Just x -> x
           Nothing -> (Node $ NodeString "" SingleQuote, [], 0) 
@@ -225,33 +244,30 @@ languageModel proc@ShellProcess{shellConfig = conf} tc = case runParser' proc in
       Nothing -> pure ([],[])
   Nothing -> pure ([],[])
   where
-    parser = case requestModule (Proxy @ParserModule) conf.modules of
-      (x:_) -> x
-      _ -> def
     input = conf.input
     loc = T.length input - conf.cursorLoc
     leftInput = T.take loc input
     wsCount = countMultiple " '\"" leftInput
     -- cursor independent of whitespace
     cursor' = loc - wsCount
-    execs = dedup $ executablelist' proc ++ fmap fst conf.builtins
+    execs = []--dedup $ executablelist' conf ++ fmap fst conf.builtins
 
     {-fileMatches exec = let 
         d = takeDirectory (T.unpack exec)
       in (doesDirectoryExist d >>= bool (pure False) (getPermissions d <&> readable)) >>= 
         bool (pure []) (getDirectoryContents d <&> filter (T.isPrefixOf exec) . (bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` exec) <$>) . fmap T.pack)-}
 
-languageHook :: ShellProcess -> IO ()
+languageHook :: ShellConfig -> IO ()
 languageHook = undefined
 
-languageFullRedraw :: ShellProcess -> IO ()
+languageFullRedraw :: ShellConfig -> IO ()
 languageFullRedraw = undefined
-type AutocompleteModel = ShellProcess -> TabCompletion -> IO ([T.Text], [T.Text])
+type AutocompleteModel = ShellConfig -> TabCompletion -> IO ([T.Text], [T.Text])
 
 data AutocompleteConfig = AutocompleteConfig {
     model      :: AutocompleteModel
-  , redrawHook :: ShellProcess -> IO ()
-  , fullRedraw :: ShellProcess -> IO ()
+  , redrawHook :: ShellConfig -> IO ()
+  , fullRedraw :: ShellConfig -> IO ()
   }
 
 instance Def AutocompleteConfig where

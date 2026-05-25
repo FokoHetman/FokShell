@@ -24,6 +24,8 @@ import FokShell.Types
 import Lib.Keys
 import FokShell.Defaults
 
+import Control.Concurrent.STM
+
 import System.Directory (getHomeDirectory)
 import qualified Data.Text as T
 import Control.Monad (when)
@@ -108,39 +110,41 @@ myCursor = Cursor
   }
   
 
-redraw :: ShellProcess -> IO ()
-redraw proc@ShellProcess{shellConfig = c} = clear >> rPrompt >> dinput >> updCursor
+redraw :: ShellConfig -> IO ()
+redraw c = clear >> rPrompt >> dinput >> updCursor
   where
     clear = putStrf "\ESC[2K\r"
-    rPrompt = displayPrompt' proc
+    rPrompt = displayPrompt' c
     dinput = putStrf $ input c
     updCursor = when (cursorLoc c > 0) $ moveCursor DLeft $ cursorLoc c
 
 main :: IO ()
-main = fokshell $ def
+main = do
+  myMods <- myModules
+  fokshell $ def
     { binds = def ++ [
-    ((alt, Character "h"), \proc -> print "h" $> proc)
+    ((alt, Character "h"), const $ print "h")
       {-((control, Character "t"), \proc -> 
         let config = shellConfig proc in let conf = config {colorScheme = nextColorScheme (colorScheme config)} in redraw conf $> proc {shellConfig = conf})-}
       ]
-    , modules =
-      [ Module (def :: DirectoryTracker)
-      , Module (def :: Movements)
-      , Module myCursor
-      , Module ColorschemeModule 
+    , modules = myMods
+    }
+
+myModules :: IO [Module ShellConfig]
+myModules = atomically . sequence $ [ module' (def :: DirectoryTracker)
+      , module' (def :: Movements)
+      , module' myCursor
+      , module' ColorschemeModule 
         { colorschemes = colorSchemes
         , current = 0
         }
-      , Module (def :: TabCompletion)
+      , module' (def :: TabCompletion)
         { maxSuggestions = 10
         , shadowText = True
         , sortAlgorithm = const sort
         }
-      , Module (def :: History)
-      , Module JobManager 
-        { jobs = []
-        }
-      , Module (def :: ParserModule)
-      , Module myPrompt
+      , module' (def :: History)
+      , module' (def :: JobManager)
+      , module' (def :: ParserModule)
+      , module' myPrompt
       ]
-    }

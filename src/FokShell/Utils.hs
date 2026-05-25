@@ -1,8 +1,5 @@
 {-# LANGUAGE LambdaCase, OverloadedStrings #-}
 module FokShell.Utils where
-
-import FokShell.Module qualified as Module
-
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
@@ -10,7 +7,7 @@ import Control.Monad (when, filterM)
 import System.Directory (getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesFileExist, canonicalizePath)
 import System.Posix (getEnv)
 import System.FilePath (takeFileName)
-import Data.Dynamic (toDyn, Typeable)
+import Data.Dynamic (toDyn)
 import Data.Functor
 import Lib.Primitive
 import Lib.Format
@@ -18,12 +15,24 @@ import Lib.Keys
 import FokShell.Types
 import GHC.IO.Exception (ExitCode (ExitSuccess, ExitFailure))
 import Language.Parser
-import Filesystem (IOMode(WriteMode, AppendMode))
-import Control.Concurrent (newEmptyMVar, newMVar)
+import System.IO (openFile)
+import Control.Concurrent (isEmptyMVar, putMVar, swapMVar, readMVar)
 
 import Data.Map qualified as Map
-import Data.Data (Proxy)
 import Data.List (intersperse)
+import Data.Bool (bool)
+import Control.Concurrent.STM
+
+
+writeText :: T.Text -> TaskPipeType -> IO ()
+writeText t Terminal = T.putStr t
+writeText t (File path mode) = openFile path mode >>= (`T.hPutStr` t)
+writeText t (ProcessData m) = isEmptyMVar m >>= bool
+  (readMVar m >>= \case
+    Left _ -> void . swapMVar m . Left . Node $ NodeString t SingleQuote
+    Right h -> T.hPutStr h t
+  )
+  (putMVar m . Left . Node $ NodeString t SingleQuote)
 
 updatePath :: ShellProcess -> IO ShellProcess 
 updatePath proc = do
@@ -55,9 +64,17 @@ redrawFromCursor c = putStrf $ T.concat [erase, lefts, cursorCode]
     lefts = T.reverse $ T.take (cursorLoc c) (T.reverse $ input c)
     cursorCode = if T.length lefts > 0 then T.concat ["\ESC[", T.pack $ show $ T.length lefts, "D"] else T.empty
 
-moveCursor':: ShellConfig -> Direction -> Int -> IO ()
-moveCursor' c DLeft  i = when (T.length (input c) > cursorLoc c) (moveCursor DLeft i)
-moveCursor' c DRight i = when (cursorLoc c > 0)  (moveCursor DRight i)
+moveCursor' :: TVar ShellConfig -> Direction -> Int -> IO ()
+moveCursor' c' DLeft  i = do
+  c <- atomically $ readTVar c'
+  when (T.length (c.input) - i >= c.cursorLoc) $ do
+    atomically $ modifyTVar c' $ \x -> x {cursorLoc = c.cursorLoc + i}
+    moveCursor DLeft i
+moveCursor' c' DRight i = do
+  c <- atomically $ readTVar c'
+  when (c.cursorLoc >= i) $ do
+    atomically $ modifyTVar c' $ \x -> x {cursorLoc = c.cursorLoc - i}
+    moveCursor DRight i
 moveCursor' _ _ _ = error "unsupported '-wrapped direction"
 
 {-
@@ -115,11 +132,11 @@ mkTask (Set t) = do
 mkTask x = error $ "unknown task: " <> show x
 -}
 
-modifyModule' :: forall a. (Module.Module' a ShellProcess,Typeable a) => Proxy a -> ShellProcess -> (a -> a) -> ShellProcess
-modifyModule' p proc f = proc {shellConfig = proc.shellConfig {modules = m}} where m = Module.modifyModule p proc.shellConfig.modules f
-
-updateWithKey :: KeyEvent -> ShellProcess -> ShellProcess
-updateWithKey event proc = proc {shellConfig = (shellConfig proc) {lastEvent=event}}
+{-modifyModule' :: forall a. (Module.Module' a ShellConfig,Typeable a) => Proxy a -> ShellConfig -> (a -> a) -> ShellConfig
+modifyModule' p conf f = conf {modules = m} where m = Module.modifyModule p conf.modules f
+-}
+updateWithKey :: KeyEvent -> ShellConfig -> ShellConfig
+updateWithKey event config = config {lastEvent=event}
 
 setToJson :: (Map.Map Node Node) -> T.Text
 setToJson t = "{" <> T.concat (intersperse ",\n" $ fmap display' $ Map.toList t) <> "}"
@@ -136,3 +153,4 @@ tail' [] = Nothing
 tail' (_:xs) = Just xs
 
 
+bool' a b c = bool b c a

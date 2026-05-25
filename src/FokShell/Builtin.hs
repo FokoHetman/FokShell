@@ -19,36 +19,36 @@ import FokShell.Module.TabCompletion
 import Data.Data (Proxy(Proxy))
 import FokShell.Module.DirectoryTracker (DirectoryTracker(DirectoryTracker, directories))
 import Debug.Trace (traceShow)
-import FokShell.Module (requestModule, modifyModule)
+import FokShell.Module (requestModule)
+import Control.Concurrent.STM (modifyTVar, atomically, TVar, readTVarIO)
 
 
 -- builtins {{{
-cd, regex :: Builtin
-cd = ("cd", cd')
---set = ("set", set')
---bmap = ("map", bmap')
-regex = ("regex", regex')
 
-cd', regex' :: [T.Text] -> (TaskPipeType,TaskPipeType,TaskPipeType) -> ShellProcess -> IO (ExitCode,ShellProcess)
-cd' args (_inh, outh, errh) process = do
+cd, regex :: [T.Text] -> (TaskPipeType,TaskPipeType,TaskPipeType) -> TVar ShellConfig -> IO (ExitCode)
+cd args (_inh, outh, errh) conf = do
+    conf' <- readTVarIO conf
     errHandle <- case errh of
       Terminal -> pure stderr
       File fname mode -> openFile fname mode
       _ -> undefined
     let writeErr = T.hPutStr errHandle
+    let updateDirTracker d = (mapM_ (atomically . (`modifyTVar`
+          (\tracker -> tracker{directories=d:tracker.directories})))
+          $ requestModule @DirectoryTracker conf'.modules)
     case args of
       [x] -> do
         let d = T.unpack x
         doesDirectoryExist d >>= bool 
-          (writeErr ("cd: directory `" <> T.pack d <> "` does not exist.\n") $> (ExitFailure 1, process))
+          (writeErr ("cd: directory `" <> T.pack d <> "` does not exist.\n") $> (ExitFailure 1))
           ((searchable <$> getPermissions d) >>= bool
-            (writeErr "cd: no permissions.\n" $> (ExitFailure 1, process))
-            (changeWorkingDirectory d
-              >> (canonicalizePath d <&> (ExitSuccess,) . updateDirTracker)))
-      []  -> pure $ (ExitSuccess, process)
-      _   -> writeErr "cd: too many args provided.\n" $> (ExitFailure 2, process)
-  where
-    updateDirTracker d = (modifyModule' (Proxy @DirectoryTracker) process (\tracker -> tracker{directories=d:tracker.directories}))
+            (writeErr "cd: no permissions.\n" $> ExitFailure 1)
+            (do
+              changeWorkingDirectory d
+              updateDirTracker =<< canonicalizePath d
+              pure ExitSuccess))
+      []  -> pure $ ExitSuccess
+      _   -> writeErr "cd: too many args provided.\n" $> ExitFailure 2
 {-set' args (inh, outh, errh) process = let
       f n = case outh of
           ProcessData oref -> putMVar oref (Left $ Set n) $> (ExitSuccess, process)
@@ -94,7 +94,7 @@ bmap' args (inh, outh, errh) process = case inh of
         Right _ -> error "map expects either an Array or a Set"
     _ -> undefined
 -}
-regex' args (inh, outh, errh) process = case inh of
+regex args (inh, outh, errh) process = case inh of
     ProcessData ref -> do
       a <- readMVar ref
       case a of
@@ -111,7 +111,7 @@ regex' args (inh, outh, errh) process = case inh of
             ProcessData ref' -> putMVar ref' . Left . Node . ArrayExp $ fmap (Node . (`NodeString` q) . T.pack) newt
             Terminal -> putStrLn $ unwords newt
             _ -> pure ()
-          pure (ExitSuccess, process)
+          pure ExitSuccess
         Right h -> do
           content <- hGetContents h
           let arg = case args of
@@ -122,7 +122,7 @@ regex' args (inh, outh, errh) process = case inh of
             ProcessData ref' -> putMVar ref' . Left . Node . ArrayExp $ fmap (Node . (`NodeString` SingleQuote) . T.pack) newt
             Terminal -> putStrLn $ unwords newt
             _ -> pure ()
-          pure (ExitSuccess, process)
+          pure ExitSuccess
     _ -> do
       errHandle <- case errh of
         Terminal -> pure stderr
@@ -130,7 +130,7 @@ regex' args (inh, outh, errh) process = case inh of
         _ -> undefined
       let writeErr = T.hPutStr errHandle
       writeErr "invalid argument"
-      pure (ExitFailure $ -1, process)
+      pure $ ExitFailure (-1)
 
 -- }}}
 

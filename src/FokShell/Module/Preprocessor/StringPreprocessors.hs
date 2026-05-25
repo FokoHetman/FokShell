@@ -13,9 +13,9 @@ import System.Environment.Blank (getEnv)
 import Data.Functor ((<&>))
 import Control.Applicative
 import Data.Data (Proxy(Proxy))
-import FokShell.Types (ShellProcess)
+import FokShell.Types (ShellConfig)
 
-substituter :: T.Text -> (ShellProcess -> IO T.Text) -> Int -> Preprocessor
+substituter :: T.Text -> (ShellConfig -> IO T.Text) -> Int -> Preprocessor
 substituter pat with times p n = do
   with' <- with p
   pure . modifyNode n $ \node -> case withProxyNode (Proxy @Primitive) node of
@@ -23,7 +23,7 @@ substituter pat with times p n = do
     Just (NodeString t q) -> Node $ NodeString (replaceN times pat with' t) q
     _ -> node
 
-substituteprefix :: T.Text -> (ShellProcess -> IO T.Text) -> Preprocessor
+substituteprefix :: T.Text -> (ShellConfig -> IO T.Text) -> Preprocessor
 substituteprefix pat with p n = do
   with' <- with p
   pure . modifyNode n $ \node -> case withProxyNode (Proxy @Primitive) node of
