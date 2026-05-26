@@ -43,6 +43,7 @@ data Process = Process {
 
 data Job = Job {
   task :: Task
+, attached :: Bool
 , jobid :: Int
 , exitCode :: MVar ExitCode
 , processes :: [Process]

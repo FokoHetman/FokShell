@@ -50,8 +50,8 @@ instance Def (Map.Map T.Text Builtin) where
 haltAction :: Action
 haltAction proc = do
   chainHook proc resetHook
-  putStrLn "^C"
-  displayPrompt' =<< readTVarIO proc
+  --putStrLn "^C"
+  --displayPrompt' =<< readTVarIO proc
   atomically . modifyTVar proc $ \p -> p {input = "",cursorLoc=0}
 
 exitAction :: Action
