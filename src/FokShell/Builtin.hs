@@ -15,12 +15,13 @@ import Control.Concurrent
 import Data.Functor
 import Text.Regex.TDFA
 import Data.Map qualified as Map
-import FokShell.Module.TabCompletion
+--import FokShell.Module.TabCompletion
 import Data.Data (Proxy(Proxy))
 import FokShell.Module.DirectoryTracker (DirectoryTracker(DirectoryTracker, directories))
 import Debug.Trace (traceShow)
 import FokShell.Module (requestModule)
 import Control.Concurrent.STM (modifyTVar, atomically, TVar, readTVarIO)
+import Lib.Primitive
 
 
 -- builtins {{{
@@ -150,5 +151,12 @@ nix = CompRule "nix" (\t -> pure $ filter (\(CompRule i _) -> t `T.isPrefixOf` i
 -}
 
 -- }}}
+
+
+instance Def (Map.Map T.Text Builtin) where
+  def = Map.fromList $ [
+      ("cd", cd)
+    , ("regex", regex)
+    ]
 
 -- vim: foldmethod=marker

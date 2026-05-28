@@ -34,6 +34,14 @@ writeText t (ProcessData m) = isEmptyMVar m >>= bool
   )
   (putMVar m . Left . Node $ NodeString t SingleQuote)
 
+getExecutables :: IO [FilePath]
+getExecutables = do
+  localFiles <- getDirectoryContents =<< getCurrentDirectory
+  localExecutables <- fmap ("./" <>) <$> (mapM canonicalizePath localFiles >>= filterM (safeCheck (fmap executable . getPermissions)))
+  pathExecutableSets <- mapM executablesInDir =<< getDirsInPath
+  pathExecs <- (mapM canonicalizePath . concat) pathExecutableSets <&> fmap takeFileName
+  pure $ pathExecs <> localExecutables
+
 updatePath :: ShellProcess -> IO ShellProcess 
 updatePath proc = do
   path <- getEnv "PATH" >>= \case

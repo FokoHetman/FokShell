@@ -28,10 +28,13 @@ import Data.Maybe (fromJust)
 import Control.Monad (forM_)
 import Debug.Trace (trace)
 
+import FokShell.Builtin
+
 data JobManager = JobManager
   {
     jobs :: [Job]
   , jobCounter :: Int
+  , builtins :: Map.Map T.Text Builtin
   }
 
 jobattach :: Builtin
@@ -84,10 +87,11 @@ instance Def JobManager where
   def = JobManager
     { jobs = []
     , jobCounter = 0
+    , builtins = def
     }
 
 instance Module' JobManager ShellConfig where
-  initHook' _ conf = atomically . modifyTVar conf $ \c -> c {builtins = Map.insert "attach" jobattach $ Map.insert "jobs" jobslist c.builtins}
+  initHook' tc conf = atomically . modifyTVar tc $ \tc' -> tc' {builtins = Map.insert "attach" jobattach $ Map.insert "jobs" jobslist tc'.builtins}
   exitHook' _ _ = pure ()
   resetHook' jm _ = do
     jmgr <- readTVarIO jm

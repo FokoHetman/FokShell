@@ -39,13 +39,6 @@ instance Def [CompletionRule] where
     , fileListCompletion (const $ pure True) "cat"
     ]
 
-instance Def (Map.Map T.Text Builtin) where
-  def = Map.fromList $ [
-      ("cd", cd)
-    , ("regex", regex)
-    ]
-
-
 
 haltAction :: Action
 haltAction proc = do

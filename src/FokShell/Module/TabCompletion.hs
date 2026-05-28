@@ -14,6 +14,8 @@ import Data.Dynamic (fromDynamic)
 import Lib.Format
 import System.IO
 
+import Data.Map qualified as Map
+
 import Data.Functor
 import Data.Bool (bool)
 import Control.Monad (when, filterM)
@@ -27,6 +29,8 @@ import System.Posix (isDirectory, getFileStatus)
 import FokShell.Module.Preprocessor (connectPreprocessors)
 import Control.Concurrent.STM
 import Debug.Trace (traceShow)
+import FokShell.Utils (getExecutables)
+import FokShell.Module.JobManager
 
 data TabContextMode = Disabled | Selection deriving (Eq, Show)
 data TabCompletion = TabCompletion
@@ -38,6 +42,7 @@ data TabCompletion = TabCompletion
   , maxSuggestions  :: Int
   , shadowText      :: Bool
   , completionRules :: [CompletionRule]
+  , executables :: [FilePath]
   }
 
 instance Def TabCompletion where
@@ -50,6 +55,7 @@ instance Def TabCompletion where
     , maxSuggestions = 10
     , shadowText = True
     , completionRules = [cdCompletion]
+    , executables = []
     }
 
 cleanPrevious :: T.Text -> IO ()
@@ -102,7 +108,9 @@ runParser' conf t = do
 
 
 instance Module' TabCompletion ShellConfig where
-  initHook' _ _ = pure ()
+  initHook' tc _ = do
+    execs <- getExecutables
+    atomically $ modifyTVar tc $ \tc' -> tc' {executables = execs}
   exitHook' _ _ = pure ()
   resetHook' tc p = do
     p' <- readTVarIO p
@@ -226,25 +234,30 @@ getRawDataWrapped n t c = getRawData n c'
     c' = T.length t - c - wsCount
 
 languageModel :: AutocompleteModel
-languageModel conf tc = runParser' conf input >>= \case
-  Just n -> do
-    let (node, prevArgs, curInd) = case getRawData n cursor' of
-          Just x -> x
-          Nothing -> (Node $ NodeString "" SingleQuote, [], 0) 
-    let curArg = last prevArgs
-    case withProxyNode (Proxy @ProcessCall) node of
-      Just (ProcessCall e _) -> case init prevArgs of
-        [] -> case filter (T.isPrefixOf curArg) execs of
-          [] -> pure ([],[])
-          x  -> pure (x,[])
-        (_exec:xs) -> do
-          let rule = lookupRule (nodeToText e) tc.completionRules
-          argMatches <- case rule of
-            Just r -> fmap (\(CompRule e _) -> e) <$> nestNTimes r (xs ++ [curArg]) (length xs)
-            Nothing -> fmap (\(CompRule e _) -> e) <$> fileCompletionRec (const $ pure True) curArg
-          pure (argMatches, [])
-      Nothing -> pure ([],[])
-  Nothing -> pure ([],[])
+languageModel conf tc = do
+  builtinl <- case requestModule @JobManager conf.modules of
+      (x:_) -> readTVarIO x <&> \x' -> Map.keys x'.builtins
+      [] -> pure []
+  let execs = dedup $ builtinl <> fmap T.pack tc.executables
+  runParser' conf input >>= \case
+    Just n -> do
+      let (node, prevArgs, curInd) = case getRawData n cursor' of
+            Just x -> x
+            Nothing -> (Node $ NodeString "" SingleQuote, [], 0) 
+      let curArg = last prevArgs
+      case withProxyNode (Proxy @ProcessCall) node of
+        Just (ProcessCall e _) -> case init prevArgs of
+          [] -> case filter (T.isPrefixOf curArg) execs of
+            [] -> pure ([],[])
+            x  -> pure (x,[])
+          (_exec:xs) -> do
+            let rule = lookupRule (nodeToText e) tc.completionRules
+            argMatches <- case rule of
+              Just r -> fmap (\(CompRule e _) -> e) <$> nestNTimes r (xs ++ [curArg]) (length xs)
+              Nothing -> fmap (\(CompRule e _) -> e) <$> fileCompletionRec (const $ pure True) curArg
+            pure (argMatches, [])
+        Nothing -> pure ([],[])
+    Nothing -> pure ([],[])
   where
     input = conf.input
     loc = T.length input - conf.cursorLoc
@@ -252,12 +265,6 @@ languageModel conf tc = runParser' conf input >>= \case
     wsCount = countMultiple " '\"" leftInput
     -- cursor independent of whitespace
     cursor' = loc - wsCount
-    execs = []--dedup $ executablelist' conf ++ fmap fst conf.builtins
-
-    {-fileMatches exec = let 
-        d = takeDirectory (T.unpack exec)
-      in (doesDirectoryExist d >>= bool (pure False) (getPermissions d <&> readable)) >>= 
-        bool (pure []) (getDirectoryContents d <&> filter (T.isPrefixOf exec) . (bool id (T.pack . (d</>) . T.unpack) (T.pack d `T.isPrefixOf` exec) <$>) . fmap T.pack)-}
 
 languageHook :: ShellConfig -> IO ()
 languageHook = undefined
