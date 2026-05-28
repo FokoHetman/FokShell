@@ -26,6 +26,7 @@ import FokShell.Module.Parser
 import System.Posix (isDirectory, getFileStatus)
 import FokShell.Module.Preprocessor (connectPreprocessors)
 import Control.Concurrent.STM
+import Debug.Trace (traceShow)
 
 data TabContextMode = Disabled | Selection deriving (Eq, Show)
 data TabCompletion = TabCompletion
@@ -48,7 +49,7 @@ instance Def TabCompletion where
     , autocomplete = def
     , maxSuggestions = 10
     , shadowText = True
-    , completionRules = [cdCompletion ]
+    , completionRules = [cdCompletion]
     }
 
 cleanPrevious :: T.Text -> IO ()
@@ -199,13 +200,14 @@ instance Module' TabCompletion ShellConfig where
     let curWordRaw c = case runParser parser.parser c.input >>= (\n -> getRawDataWrapped n c.input c.cursorLoc) . snd of
           Just (_,x,_) -> last x
           Nothing    -> ""
-
     m <- tc'.autocomplete.model conf' tc'
     when (tc'.mode == Selection) $ do
       cleanPrevious conf'.input
       displayCompletions (curWordRaw conf') (tc'.sortAlgorithm conf' $ fst m) tc'.selected tc'.maxSuggestions
+    
+    atomically . modifyTVar tc $ \tc'' -> tc'' {completions = tc''.sortAlgorithm conf' $ fst m}
+
     pure True
-    where
 
 --executablelist' :: ShellConfig -> [T.Text]
 --executablelist' p = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache p) "executables" >>= \x -> lookupCache x "execs")
