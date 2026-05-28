@@ -14,20 +14,18 @@ import Control.Concurrent (newEmptyMVar, newMVar, isEmptyMVar, readMVar)
 import FokShell.Module.Prompt (displayPrompt')
 import Lib.Primitive
 import FokShell.Module.Parser
-import Data.Data (Proxy(Proxy))
-import System.Process (createPipe, waitForProcess, terminateProcess)
+import System.Process (createPipe, terminateProcess)
 import GHC.IO.Exception (ExitCode (ExitSuccess, ExitFailure))
 import Control.Concurrent.STM
 import Data.Functor
 
 import Data.Map qualified as Map
-import Control.Concurrent.Async (poll, wait, cancel, waitCatch)
+import Control.Concurrent.Async (cancel, waitCatch)
 import Data.Bool (bool)
-import GHC.IO.Handle (hDuplicateTo, hFlush)
+import GHC.IO.Handle (hDuplicateTo)
 import System.IO (stdin, stdout, stderr)
 import Data.Maybe (fromJust)
 import Control.Monad (forM_)
-import System.Posix (signalProcess, sigTERM)
 import Debug.Trace (trace)
 
 data JobManager = JobManager
@@ -92,16 +90,15 @@ instance Module' JobManager ShellConfig where
   initHook' _ conf = atomically . modifyTVar conf $ \c -> c {builtins = Map.insert "attach" jobattach $ Map.insert "jobs" jobslist c.builtins}
   exitHook' _ _ = pure ()
   resetHook' jm _ = do
-    print "achtung"
     jmgr <- readTVarIO jm
-    print $ fmap (\job -> job.attached) jmgr.jobs
-    print jmgr.jobCounter
-    forM_ (filter (\job -> job.attached) jmgr.jobs) $ \job -> mapM_ (\case
-      Process{procHandle,exitCode} -> cancel exitCode >> case procHandle of
-        Just x -> trace "terminated" $ terminateProcess x
-        Nothing -> trace "?" $ pure ()
-      BuiltinProcess{exitCode} -> trace "??" $ cancel exitCode
-      ) job.processes
+    forM_ (filter (\job -> job.attached) jmgr.jobs) $ \job -> readTVarIO job.processes >>= mapM_ (\case
+        Process{procHandle,exitCode} -> cancel exitCode >> case procHandle of
+          Just x -> terminateProcess x
+          Nothing -> pure ()
+        BuiltinProcess{exitCode} -> trace "??" $ cancel exitCode
+        )
+  
+    atomically $ modifyTVar jm $ \jm' -> jm' {jobs=fmap (\job -> job {attached=False}) jm'.jobs}
   preHook' jm p (KeyModifiers 0, Enter) = do
           putStrLn ""
           conf <- readTVarIO p
@@ -127,12 +124,13 @@ instance Module' JobManager ShellConfig where
                     (a,b) <- createPipe
                     make a <&> (,b)
                   jm' <- readTVarIO jm
+                  proclist <- newTVarIO []
                   let job = (Job {
                       task = t
                     , attached = False
                     , jobid = jm'.jobCounter
-                    , exitCode = mvar
-                    , processes = []
+                    , exitCode = Nothing
+                    , processes = proclist
                     , inh = in_h
                     , inrh = Just inrh
                     , outh = out_h
@@ -141,23 +139,23 @@ instance Module' JobManager ShellConfig where
                     , errrh = Just errrh
                     })
                   atomically $ modifyTVar p $ \p' -> p' {input="", cursorLoc=0}
-                  job' <- spawnJob job p
+                  ecode <- spawnJob job p
+                  let job' = (job :: Job) {exitCode = Just ecode}
                   jm' <- readTVarIO jm
                   T.putStrLn $ "[" <> T.show jm'.jobCounter <> "] Spawned a background job."
                   atomically . modifyTVar jm $ \jm' -> jm' {jobs = job':jm'.jobs, jobCounter = jm'.jobCounter + 1}
-                  print "append"
                   displayPrompt' =<< readTVarIO p
                   pure False
                 )
                 (do
                   jm' <- readTVarIO jm
-                  let job = (Job t True jm'.jobCounter mvar [] Terminal Terminal Terminal Nothing Nothing Nothing)
+                  proclist <- newTVarIO []
+                  let job = (Job t True jm'.jobCounter Nothing proclist Terminal Terminal Terminal Nothing Nothing Nothing)
                   atomically $ modifyTVar p $ \p' -> p' {input="", cursorLoc=0}
-                  job' <- spawnJob job p
-                  atomically . modifyTVar jm $ \jm' -> jm' {jobs = job':jm'.jobs, jobCounter = jm'.jobCounter + 1}
-                  case reverse job'.processes of
-                    (x:_) -> waitCatch x.exitCode >> pure ()
-                    _ -> pure ()
+                  a <- spawnJob job p
+                  let job' = (job :: Job) {exitCode = Just a}
+                  atomically . modifyTVar jm $ \jm' -> jm' {jobs = job:jm'.jobs, jobCounter = jm'.jobCounter + 1}
+                  _ <- waitCatch a
                   displayPrompt' =<< readTVarIO p
                   pure False
                 )

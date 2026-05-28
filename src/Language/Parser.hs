@@ -35,9 +35,16 @@ attachPrev prev t =
   case prevTask t of
     Nothing ->
       t { prevTask = Just prev }
-
     Just p ->
       t { prevTask = Just (attachPrev prev p) }
+
+atFirstTask :: Task -> (Task -> Task) -> Task
+atFirstTask t f =
+  case prevTask t of
+    Nothing -> f t
+    Just p ->
+      t { prevTask = Just (atFirstTask p f) }
+
 
 
 class Node' a where
@@ -141,12 +148,14 @@ instance Node' ChainExp where
   makeTask' (ChainExp t left right) = do
     n2' <- makeTask right
     n1' <- makeTask left
-    pure (attachPrev n1' n2')
-     {
-      condition = case t of
+    --pure (attachPrev n1' n2')
+    pure $ atFirstTask n2' $ \task ->
+     task {
+      prevTask = Just n1'
+     ,condition = case t of
       OnSuccess -> Just (==ExitSuccess)
       OnFailure -> Just (/=ExitSuccess)
-      Sequence -> Nothing
+      Sequence -> Just (const True)
     }
   getRawData' (ChainExp t left right) c = bool (getRawData left c) (getRawData right (c - nodeLen left - chainLen t)) (c > nodeLen left)
 
