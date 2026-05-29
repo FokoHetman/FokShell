@@ -21,7 +21,7 @@ instance Def ColorschemeModule where
 instance Module' ColorschemeModule ShellConfig where
   initHook' _ _ = pure ()
   exitHook' _ _ = pure ()
-  resetHook' _ _ = pure ()
+  resetHook' _ _ = pure True
   preHook' _ _ _ = pure True
   postHook' _ _ _ = pure True
 

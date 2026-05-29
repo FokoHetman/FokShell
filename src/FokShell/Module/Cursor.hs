@@ -20,7 +20,7 @@ instance Def Cursor where
 instance Module' Cursor ShellConfig where
   initHook' tc _ = mkCursor =<< readTVarIO tc
   exitHook' _ _ = pure ()
-  resetHook' tc _ = mkCursor =<< readTVarIO tc
+  resetHook' tc _ = (mkCursor =<< readTVarIO tc) $> True
   preHook' _ _ _ = pure True
   postHook' tc _ _ = (readTVarIO tc >>= mkCursor) $> True
 

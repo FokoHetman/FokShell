@@ -42,7 +42,7 @@ instance Def [CompletionRule] where
 
 haltAction :: Action
 haltAction proc = do
-  chainHook proc resetHook
+  chainBoolHook proc resetHook
   --putStrLn "^C"
   --displayPrompt' =<< readTVarIO proc
   atomically . modifyTVar proc $ \p -> p {input = "",cursorLoc=0}

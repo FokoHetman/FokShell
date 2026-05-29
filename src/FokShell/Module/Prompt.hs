@@ -24,7 +24,12 @@ instance Module' Prompt ShellConfig where
     conf' <- (readTVarIO conf)
     displayPrompt tc' conf'
   exitHook' _ _ = pure ()
-  resetHook' _ _ = pure ()
+  resetHook' tc conf = do
+    tc' <- (readTVarIO tc)
+    conf' <- (readTVarIO conf)
+    putStr "\r\ESC[0J"
+    displayPrompt tc' conf'
+    pure True
   preHook' _ _ _ = pure True
   -- unluckily, the following conflicts with a lot of stuff :(
   --postHook' _ _ (KeyModifiers 0, Enter) = displayPrompt tc p $> (True,())

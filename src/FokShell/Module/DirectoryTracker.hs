@@ -50,6 +50,6 @@ instance Module' DirectoryTracker ShellConfig where
       currentDir <- getCurrentDirectory
       atomically . modifyTVar tc $ \tc' -> tc' {directories=currentDir:tc'.directories}
   exitHook' tc p = pure ()
-  resetHook' tc p = pure ()
+  resetHook' tc p = pure True
   preHook' tc p _ = pure True
   postHook' tc p _ = pure True

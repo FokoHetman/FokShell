@@ -16,7 +16,7 @@ class Module' a proc where
   -- | hook called upon shell exit
   exitHook'    :: TVar a -> TVar proc -> IO ()
   -- | hook called in eg. haltHook, used to restore the default state of the Module
-  resetHook'   :: TVar a -> TVar proc -> IO ()
+  resetHook'   :: TVar a -> TVar proc -> IO Bool
   -- | hook called before default processing of keyevents
   preHook'     :: TVar a -> TVar proc -> KeyEvent -> IO Bool
   -- | hook called after default processing of keyevents
@@ -28,9 +28,10 @@ data Module p where
 
 module' :: (Typeable a, Module' a p) => a -> STM (Module p)
 module' m = Module <$> newTVar m
-initHook, exitHook, resetHook :: (Module p) -> TVar p -> IO ()
+initHook, exitHook :: (Module p) -> TVar p -> IO ()
 initHook (Module a) p = initHook' a p
 exitHook (Module a) p = exitHook' a p
+resetHook :: Module p -> TVar p -> IO Bool
 resetHook (Module a) p = resetHook' a p
 
 preHook, postHook :: Module p -> TVar p -> KeyEvent -> IO Bool
@@ -84,6 +85,12 @@ chainHook pvar hook = do
   modules <- getModules <$> atomically (readTVar pvar)
   chainHookL modules pvar hook
 
+chainBoolHook :: forall p. ModuleContainer p => TVar p -> (Module p -> TVar p -> IO Bool) -> IO Bool
+chainBoolHook pvar hook = do
+  modules <- getModules <$> atomically (readTVar pvar)
+  chainBoolHookL modules pvar hook
+
+
 chainEventHook :: forall p. ModuleContainer p => TVar p -> (Module p -> TVar p -> KeyEvent -> IO Bool) -> KeyEvent -> IO Bool
 chainEventHook pvar hook event = do
   modules <- getModules <$> atomically (readTVar pvar)
@@ -99,6 +106,12 @@ chainEventHookL [] _ _ _ = pure True
 chainEventHookL (m:ms) p hook e = do
   b <- hook m p e
   bool (pure False) (chainEventHookL ms p hook e) b
+
+chainBoolHookL :: forall p. [Module p] -> TVar p -> (Module p -> TVar p -> IO Bool) -> IO Bool
+chainBoolHookL [] _ _ = pure True
+chainBoolHookL (m:ms) p hook = do
+  b <- hook m p
+  bool (pure False) (chainBoolHookL ms p hook) b
 
 
 

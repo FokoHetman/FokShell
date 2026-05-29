@@ -22,7 +22,7 @@ instance Def Movements where
     }
 instance Module' Movements ShellConfig where
   initHook' _tc _p = pure ()
-  resetHook' _tc _p = pure ()
+  resetHook' _tc _p = pure True
   exitHook' _tc _p = pure ()
   preHook' tc conf (modf,Arrow d) = do
     config <- readTVarIO conf

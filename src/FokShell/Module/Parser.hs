@@ -32,7 +32,7 @@ r4 = detach r3 <|> r3
 instance Module' ParserModule ShellConfig where
   initHook' _ _ = pure ()
   exitHook' _ _ = pure ()
-  resetHook' _ _ = pure ()
+  resetHook' _ _ = pure True
   preHook' _ _ _ = pure True
   postHook' _ _ _ = pure True
 

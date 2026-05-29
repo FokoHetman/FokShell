@@ -116,6 +116,7 @@ instance Module' TabCompletion ShellConfig where
     p' <- readTVarIO p
     cleanPrevious p'.input
     atomically $ modifyTVar tc $ \tc' -> tc' {mode = Disabled, selected = Nothing}
+    pure True
   preHook' tc conf e = do
     conf' <- readTVarIO conf
     tc' <- readTVarIO tc

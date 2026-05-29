@@ -30,20 +30,22 @@ data Task = Task {
 , attach      :: Bool
 }
 
+mapTask :: (Task -> Task) -> Task -> Task
+mapTask f t = f $ case t.prevTask of
+  Just p -> t {prevTask = Just (mapTask f p)}
+  Nothing-> t
+
 attachPrev :: Task -> Task -> Task
 attachPrev prev t =
-  case prevTask t of
-    Nothing ->
-      t { prevTask = Just prev }
-    Just p ->
-      t { prevTask = Just (attachPrev prev p) }
+  case t.prevTask of
+    Nothing -> t { prevTask = Just prev }
+    Just p -> t { prevTask = Just (attachPrev prev p) }
 
 atFirstTask :: Task -> (Task -> Task) -> Task
 atFirstTask t f =
-  case prevTask t of
+  case t.prevTask of
     Nothing -> f t
-    Just p ->
-      t { prevTask = Just (atFirstTask p f) }
+    Just p -> t { prevTask = Just (atFirstTask p f) }
 
 
 
@@ -122,7 +124,7 @@ instance Node' Detach where
     inh <- ProcessData <$> newMVar (Right inread)
     outh <- ProcessData <$> newMVar (Right outwrite)
     errh <- ProcessData <$> newMVar (Right errwrite)
-    pure t {attach = False, pipeIn = inh, pipeOut = outh, pipeErr = errh}
+    pure $ mapTask (\t' -> t' {attach = False}) t {pipeIn = inh, pipeOut = outh, pipeErr = errh}
   getRawData' (Detach n) = getRawData n
 -- }}}
 

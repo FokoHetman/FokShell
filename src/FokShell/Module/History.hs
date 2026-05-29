@@ -18,6 +18,8 @@ import Control.Monad (unless, when)
 import System.Posix (createFile, ownerReadMode, ownerWriteMode, closeFd)
 import Lib.Format
 
+import Data.Functor
+
 import FokShell.Utils (head', moveCursor', redrawFromCursor)
 
 import Control.Concurrent.STM
@@ -71,7 +73,7 @@ instance Module' History ShellConfig where
   exitHook' m _p = do
     m' <- readTVarIO m
     m'.writeHistory (take m'.entryLimit m'.history)
-  resetHook' m _p = atomically . modifyTVar m $ \m' -> m' {historyIndex = Nothing}
+  resetHook' m _p = (atomically . modifyTVar m $ \m' -> m' {historyIndex = Nothing}) $> True
   preHook' m p (KeyModifiers 0, Enter) = do
     p' <- readTVarIO p
     atomically (modifyTVar m $ \m' -> m' {history=m'.appendToHistory p'.input m'.history, historyIndex = Nothing})
