@@ -28,13 +28,13 @@ import Control.Monad (forM_)
 import Debug.Trace (trace)
 
 import FokShell.Builtin
-import System.Posix (getProcessGroupIDOf, getProcessGroupID, stdInput, setTerminalProcessGroupID, Fd, defaultFileFlags, OpenMode (ReadWrite), openFd, setProcessGroupIDOf, getProcessID, installHandler, sigTTIN, sigTSTP, sigTTOU, Handler (Ignore))
+import System.Posix (getProcessGroupIDOf, getProcessGroupID, stdInput, setTerminalProcessGroupID, Fd, defaultFileFlags, OpenMode (ReadWrite), openFd, setProcessGroupIDOf, getProcessID, installHandler, sigTTIN, sigTSTP, sigTTOU, Handler (Ignore), fdToHandle)
 
 import Control.Concurrent.Async (wait, async, Async)
-import Control.Monad (when)
+import Control.Monad (when, forever)
 import System.Process
-import Control.Concurrent (putMVar, tryReadMVar)
-import GHC.IO.Handle (hFlush, hClose, hPutStr)
+import Control.Concurrent (putMVar, tryReadMVar, forkIO, killThread)
+import GHC.IO.Handle (hFlush, hClose, hPutStr, BufferMode (NoBuffering), hSetBuffering, hGetChar, hPutChar)
 import Control.Exception (catch)
 import System.IO (openFile)
 
@@ -75,9 +75,36 @@ jobattach args (h_in, h_out, h_err) conf = do
       _ -> pure $ ExitFailure $ -1
 
 attachToJob :: Job -> IO ExitCode
-attachToJob Job{inrh, outrh, errrh, exitCode} = do
-  print "attaching"
-  f inrh stdin
+attachToJob Job{tty,inrh, outrh, errrh, exitCode} = do
+
+  hSetBuffering stdin NoBuffering
+  tid1 <- forkIO $ case inrh of
+    Just proc_in -> do
+      hSetBuffering proc_in NoBuffering
+      forever $ do
+        c <- hGetChar stdin
+        hPutChar proc_in c
+    Nothing -> pure ()
+
+  tid2 <- forkIO $ case outrh of
+    Just proc_out -> do
+      hSetBuffering proc_out NoBuffering
+      forever $ do
+        c <- hGetChar proc_out
+        hPutChar stdout c
+    Nothing -> pure ()
+
+  e <- case exitCode of
+    Just x -> waitCatch x <&> \case
+      Right e -> e
+      Left _ -> ExitFailure $ -1
+    Nothing -> pure $ ExitFailure $ -1
+
+  killThread tid1
+  killThread tid2
+
+  pure e
+  {-f inrh stdin
   f outrh stdout
   f errrh stderr
   case exitCode of
@@ -88,7 +115,7 @@ attachToJob Job{inrh, outrh, errrh, exitCode} = do
   where
     f a b = case a of
       Just x -> hDuplicateTo x b
-      Nothing -> pure ()
+      Nothing -> pure ()-}
 
 jobslist :: Builtin
 jobslist args (h_in, h_out, h_err) conf = do
@@ -129,7 +156,7 @@ instance Module' JobManager ShellConfig where
         Process{procHandle,exitCode} -> cancel exitCode >> case procHandle of
           Just x -> terminateProcess x
           Nothing -> pure ()
-        BuiltinProcess{exitCode} -> trace "??" $ cancel exitCode
+        BuiltinProcess{exitCode} -> cancel exitCode
         )
     atomically $ modifyTVar jm $ \jm' -> jm' {jobs=fmap (\job -> job {attached=False}) jm'.jobs}
     pure $ null attachedJobs
