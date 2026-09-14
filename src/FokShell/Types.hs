@@ -8,26 +8,27 @@ import Lib.Keys
 import System.Process
 import System.Directory (doesDirectoryExist, doesFileExist)
 import Debug.Trace
-import Data.Functor
 import GHC.IO.Handle
 import Language.Parser
 import GHC.IO.Exception (ExitCode (ExitFailure), IOErrorType (NoSuchThing, PermissionDenied))
 import Data.List (sort, group)
-import Control.Concurrent (MVar, readMVar, putMVar, isEmptyMVar, tryReadMVar)
 import Data.Bool (bool)
 import Data.Maybe (fromMaybe)
-import System.IO (openFile, IOMode)
 import FokShell.Module qualified as Module
 import Control.Exception (catch)
 import System.IO.Error (ioeGetErrorType, ioeGetErrorString, ioeGetFileName)
-import FokShell.Module (ModuleContainer)
-import Control.Concurrent.STM (readTVar, readTVarIO, TVar)
+import Control.Concurrent.STM (TVar)
 
 import Data.Map qualified as Map
 import Control.Concurrent.Async (async, Async)
-import System.Posix (setTerminalProcessGroupID, stdInput, Fd, setProcessGroupIDOf, getProcessGroupIDOf)
-import Control.Monad (when)
+import System.Posix (Fd)
+import Control.Monad.IO.Class (MonadIO)
 
+-- DefaultIO class {{{
+class DefaultIO a where defM :: MonadIO m => m a
+-- }}}
+
+-- process datatypes {{{
 data Process = Process {
   pid       :: Maybe Pid
 , procHandle:: Maybe ProcessHandle
@@ -57,10 +58,10 @@ data Job = Job {
 , errrh:: Maybe Handle
 , inrh :: Maybe Handle
 }
-data State = InputOutput
+-- }}}
+
 data ShellProcess = ShellProcess {
     shellConfig :: ShellConfig
-  , shellState  :: State
   , shellCache  :: Cache T.Text (Cache T.Text Dynamic)
 }
 
@@ -76,16 +77,16 @@ safeGetChar h =
       f = const $ pure Nothing
 
 forward :: Handle -> Handle -> IO ()
-forward read write = do
-  char <- safeGetChar read
+forward readh writeh = do
+  char <- safeGetChar readh
   case char of
     Just c -> do
-      hPutChar write c
-      forward read write
+      hPutChar writeh c
+      forward readh writeh
     Nothing -> pure ()
 
 handleProcessException :: ShellConfig -> IOError -> IO Process
-handleProcessException proc' e = do
+handleProcessException _proc e = do
   traceIO $ fromMaybe "" ((<>": ") <$> ioeGetFileName e) <> ioeGetErrorString e
   let ecode = case ioeGetErrorType e of
             NoSuchThing      -> ExitFailure 127
@@ -125,8 +126,10 @@ data ShellConfig = ShellConfig
   , modules :: [Module.Module ShellConfig]
   }
 
-instance ModuleContainer ShellConfig where
+instance Module.ModuleContainer ShellConfig where
   getModules c = c.modules
 
 executablelist :: ShellProcess -> [T.Text]
-executablelist proc = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache proc) "executables" >>= \x -> lookupCache x "execs")
+executablelist shellproc = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache shellproc) "executables" >>= \x -> lookupCache x "execs")
+
+-- vim: foldmethod=marker

@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs, ScopedTypeVariables #-}
+{-# LANGUAGE GADTs, ScopedTypeVariables, AllowAmbiguousTypes #-}
 module FokShell.Module where
 import Lib.Keys (KeyEvent)
 import Data.Bool (bool)
@@ -10,24 +10,27 @@ import Control.Concurrent.STM
 class ModuleContainer p where
   getModules   :: p -> [Module p]
 
+class Configurable runtime conf where
+  configure :: conf -> IO runtime
+
+data ModuleConfig where ModuleConfig :: (Configurable runtime conf, Module' runtime proc) => conf -> ModuleConfig
+
 class Module' a proc where
   -- | hook called upon shell's startup
-  initHook'    :: TVar a -> TVar proc -> IO ()
+  initHook'    :: a -> TVar proc -> IO ()
   -- | hook called upon shell exit
-  exitHook'    :: TVar a -> TVar proc -> IO ()
+  exitHook'    :: a -> TVar proc -> IO ()
   -- | hook called in eg. haltHook, used to restore the default state of the Module
-  resetHook'   :: TVar a -> TVar proc -> IO Bool
+  resetHook'   :: a -> TVar proc -> IO Bool
   -- | hook called before default processing of keyevents
-  preHook'     :: TVar a -> TVar proc -> KeyEvent -> IO Bool
+  preHook'     :: a -> TVar proc -> KeyEvent -> IO Bool
   -- | hook called after default processing of keyevents
-  postHook'    :: TVar a -> TVar proc -> KeyEvent -> IO Bool
+  postHook'    :: a -> TVar proc -> KeyEvent -> IO Bool
 
 data Module p where
-  Module :: (Module' a p,Typeable a) => TVar a -> Module p
+  Module :: (Module' a p,Typeable a) => a -> Module p
 
 
-module' :: (Typeable a, Module' a p) => a -> STM (Module p)
-module' m = Module <$> newTVar m
 initHook, exitHook :: (Module p) -> TVar p -> IO ()
 initHook (Module a) p = initHook' a p
 exitHook (Module a) p = exitHook' a p
@@ -123,7 +126,7 @@ withProxy _ (Module a) = cast a
 withType :: forall i p. Typeable i => Module p -> Maybe i
 withType (Module a) = cast a
 
-requestModule :: forall a p. (Module' a p,Typeable a) => [Module p] -> [TVar a]
+requestModule :: forall a p. (Module' a p,Typeable a) => [Module p] -> [a]
 requestModule xs = fmap fromJust $ filter isJust $ fmap withType xs
 --requestModule :: forall a p. (Module' a p,Typeable a) => Proxy a -> [Module p] -> [TVar a]
 --requestModule p xs = fmap fromJust $ filter isJust $ fmap (withProxy p) xs

@@ -10,7 +10,6 @@ import Network.HostName
 import Lib.Format (getFormattedDirectory)
 import System.Posix (getEffectiveUserName)
 import System.IO (stdout, hFlush)
-import Data.Proxy
 import Control.Concurrent.STM (readTVarIO)
 import Data.Functor
 data Prompt = Prompt
@@ -20,15 +19,13 @@ data Prompt = Prompt
 
 instance Module' Prompt ShellConfig where
   initHook' tc conf =  do
-    tc' <- (readTVarIO tc)
     conf' <- (readTVarIO conf)
-    displayPrompt tc' conf'
+    displayPrompt tc conf'
   exitHook' _ _ = pure ()
   resetHook' tc conf = do
-    tc' <- (readTVarIO tc)
     conf' <- (readTVarIO conf)
     putStr "\r\ESC[0J"
-    displayPrompt tc' conf'
+    displayPrompt tc conf'
     pure True
   preHook' _ _ _ = pure True
   -- unluckily, the following conflicts with a lot of stuff :(
@@ -64,7 +61,7 @@ displayPrompt (Prompt {components}) p = mapM (render p) components >>= T.putStr 
 
 
 displayPrompt' :: ShellConfig -> IO ()
-displayPrompt' proc = mapM readTVarIO (requestModule @Prompt proc.modules) >>= mapM_ (`displayPrompt` proc)
+displayPrompt' proc = mapM_ (`displayPrompt` proc) $ requestModule @Prompt proc.modules
 
 
 data TextComponent = TextComponent (IO T.Text, Colorscheme -> T.Text)
@@ -72,7 +69,7 @@ instance PromptComponent' TextComponent where
   render' proc (TextComponent (t, formatting)) = do
     cscheme <- case requestModule @ColorschemeModule proc.modules of
           [] -> pure def
-          (x':_) -> readTVarIO x' <&> \x -> x.colorschemes !! x.current
+          (x:_) -> pure $ x.colorschemes !! x.current
     (<>clear) . (formatting cscheme <>) <$> t
 
 bold,clear :: T.Text

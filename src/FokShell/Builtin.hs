@@ -2,7 +2,6 @@
 -- | basic builtins
 module FokShell.Builtin where
 import FokShell.Types
-import FokShell.Utils
 import Language.Parser
 import System.IO (stderr, openFile, hGetContents)
 import Data.Text.IO qualified as T
@@ -15,10 +14,8 @@ import Control.Concurrent
 import Data.Functor
 import Text.Regex.TDFA
 import Data.Map qualified as Map
---import FokShell.Module.TabCompletion
 import Data.Data (Proxy(Proxy))
-import FokShell.Module.DirectoryTracker (DirectoryTracker(DirectoryTracker, directories))
-import Debug.Trace (traceShow)
+import FokShell.Module.DirectoryTracker (DirectoryTracker(directories))
 import FokShell.Module (requestModule)
 import Control.Concurrent.STM (modifyTVar, atomically, TVar, readTVarIO)
 import Lib.Primitive
@@ -34,9 +31,7 @@ cd args (_inh, outh, errh) conf = do
       File fname mode -> openFile fname mode
       _ -> undefined
     let writeErr = T.hPutStr errHandle
-    let updateDirTracker d = (mapM_ (atomically . (`modifyTVar`
-          (\tracker -> tracker{directories=d:tracker.directories})))
-          $ requestModule @DirectoryTracker conf'.modules)
+    let updateDirTracker d = (mapM_ (\dt -> atomically . modifyTVar dt.directories $ (d:))) $ requestModule @DirectoryTracker conf'.modules
     case args of
       [x] -> do
         let d = T.unpack x

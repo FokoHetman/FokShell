@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 module FokShell.Module.Cursor where
 import Lib.Primitive
 import FokShell.Module.Colorscheme
@@ -7,25 +8,38 @@ import FokShell.Types (ShellConfig)
 import FokShell.Module
 
 import Data.Functor
-import Control.Concurrent.STM (readTVarIO)
+import Control.Concurrent.STM (newTVar, TVar, atomically, readTVarIO)
 
-data Cursor = Cursor
+data CursorConfig = CursorConfig
   {
     shape :: CursorShape
   , color :: Color
   }
-instance Def Cursor where
-  def = Cursor { shape = BlinkingBar, color = RGB 255 255 255 }
+instance Def CursorConfig where def = CursorConfig { shape = BlinkingBar, color = RGB 255 255 255 }
+
+data Cursor = Cursor
+  { shape :: TVar CursorShape
+  , color :: TVar Color
+  }
+
+instance Configurable Cursor CursorConfig where
+  configure conf = atomically $ do
+    shape <- newTVar conf.shape
+    color <- newTVar conf.color
+    pure Cursor {..}
 
 instance Module' Cursor ShellConfig where
-  initHook' tc _ = mkCursor =<< readTVarIO tc
+  initHook' tc _ = mkCursor tc
   exitHook' _ _ = pure ()
-  resetHook' tc _ = (mkCursor =<< readTVarIO tc) $> True
+  resetHook' tc _ = mkCursor tc $> True
   preHook' _ _ _ = pure True
-  postHook' tc _ _ = (readTVarIO tc >>= mkCursor) $> True
+  postHook' tc _ _ = mkCursor tc $> True
 
 mkCursor :: Cursor -> IO ()
-mkCursor Cursor{shape,color} = putStr (show shape <> cursorColor color) >> hFlush  stdout
+mkCursor Cursor{shape,color} = do
+  color' <- readTVarIO color
+  shape' <- readTVarIO shape
+  putStr (show shape' <> cursorColor color') >> hFlush stdout
 
 cursorColor :: Color -> String
 cursorColor c = "\ESC]12;" <> show hex <> "\a"

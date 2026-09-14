@@ -37,12 +37,14 @@ import Control.Concurrent (putMVar, tryReadMVar, forkIO, killThread)
 import GHC.IO.Handle (hFlush, hClose, hPutStr, BufferMode (NoBuffering), hSetBuffering, hGetChar, hPutChar)
 import Control.Exception (catch)
 import System.IO (openFile)
+import Data.IORef (newIORef)
+import Control.Monad.IO.Class (MonadIO(liftIO))
 
 
 data JobManager = JobManager
   {
-    jobs :: [Job]
-  , jobCounter :: Int
+    jobs :: TVar [Job]
+  , jobCounter :: TVar Int
   , builtins :: Map.Map T.Text Builtin
   , fd :: Fd
   }
@@ -50,14 +52,12 @@ data JobManager = JobManager
 jobattach :: Builtin
 jobattach args (h_in, h_out, h_err) conf = do
   conf' <- readTVarIO conf
-  jobmgr <- case requestModule @JobManager conf'.modules of
-    (x:_) -> Just <$> readTVarIO x
-    _ -> pure Nothing
-  let findJob jobid = case jobmgr of
-        Just x -> case filter (\job -> job.jobid == jobid) x.jobs of
-          [x'] -> Just x'
-          _ -> Nothing
-        _ -> Nothing
+  jobs <- case requestModule @JobManager conf'.modules of
+    (x:_) -> readTVarIO x.jobs
+    _ -> pure []
+  let findJob jobid = case filter (\job -> job.jobid == jobid) jobs of
+            [x'] -> Just x'
+            _ -> Nothing
   case h_in of
     ProcessData v -> (not <$> isEmptyMVar v) >>= bool
       ((mapM (attachToJob . fromJust . findJob . (read :: String -> Int) . T.unpack) args) <&> \case
@@ -123,19 +123,22 @@ jobslist args (h_in, h_out, h_err) conf = do
   case requestModule @JobManager conf'.modules of
     (mgr:_) -> case h_out of
       Terminal -> do
-        mgr' <- readTVarIO mgr
-        T.putStrLn $ T.intercalate "\n" $ fmap (\x -> T.show x.jobid) mgr'.jobs
+        jobs <- readTVarIO mgr.jobs
+        T.putStrLn $ T.intercalate "\n" $ fmap (\x -> T.show x.jobid) jobs
         pure ExitSuccess
       _ -> undefined
     _ -> undefined
 
-instance Def JobManager where
-  def = JobManager
-    { jobs = []
-    , jobCounter = 0
-    , builtins = def
-    , fd = 0
-    }
+instance DefaultIO JobManager where
+  defM = liftIO . atomically $ do
+      jobs <- newTVar []
+      jobCounter <- newTVar 0
+      pure $ JobManager
+        { jobs
+        , jobCounter
+        , builtins = def
+        , fd = 0
+        }
 
 instance Module' JobManager ShellConfig where
   initHook' tc conf = do
@@ -144,9 +147,9 @@ instance Module' JobManager ShellConfig where
     gpid <- getProcessGroupID
     setProcessGroupIDOf pid gpid
     setTerminalProcessGroupID fd gpid
-    installHandler sigTTOU Ignore Nothing
-    installHandler sigTTIN Ignore Nothing
-    installHandler sigTSTP Ignore Nothing
+    void $ installHandler sigTTOU Ignore Nothing
+    void $ installHandler sigTTIN Ignore Nothing
+    void $ installHandler sigTSTP Ignore Nothing
     atomically . modifyTVar tc $ \tc' -> tc' {builtins = Map.insert "attach" jobattach $ Map.insert "jobs" jobslist tc'.builtins,fd=fd}
   exitHook' _ _ = pure ()
   resetHook' jm _ = do
