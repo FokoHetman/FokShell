@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, RecordWildCards #-}
 module FokShell.Module.Colorscheme where
 import FokShell.Types
 import FokShell.Module
@@ -6,25 +6,29 @@ import qualified Data.Text as T
 import Data.List (intercalate)
 import Lib.Primitive
 import Data.Char (chr)
+import Control.Concurrent.STM (TVar, newTVarIO)
 
-data ColorschemeModule = ColorschemeModule
-  { colorschemes  :: [Colorscheme]
-  , current       :: Int
+data ColorschemeConfig = ColorschemeConfig
+  { colorscheme :: Colorscheme
   }
 
-instance Def ColorschemeModule where
-  def = ColorschemeModule
-    { colorschemes = [def :: Colorscheme]
-    , current = 0
-    }
+data ColorschemeModule = ColorschemeModule
+  { colorscheme :: TVar Colorscheme
+  }
 
-instance Module' ColorschemeModule ShellConfig where
-  initHook' _ _ = pure ()
-  exitHook' _ _ = pure ()
-  resetHook' _ _ = pure True
-  preHook' _ _ _ = pure True
-  postHook' _ _ _ = pure True
+instance Configurable ColorschemeModule ColorschemeConfig where
+  configure conf = do
+    colorscheme <- newTVarIO conf.colorscheme
+    pure ColorschemeModule{..}
 
+instance Module' ColorschemeModule ShellAction where
+  initHook' _ = pure ()
+  exitHook' _ = pure ()
+  resetHook' _ = pure True
+  preHook' _ _ = pure True
+  postHook' _ _ = pure True
+
+-- Types {{{
 
 data Color = RGB Int Int Int | Hex Int
 
@@ -83,3 +87,6 @@ instance Def Colorscheme where
 foreground,background :: Color -> T.Text
 foreground c = "\ESC[38;2;" <> T.show c <> "m"
 background c = "\ESC[48;2;" <> T.show c <> "m"
+-- }}}
+
+-- vim: foldmethod=marker

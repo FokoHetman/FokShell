@@ -1,9 +1,6 @@
 {-# LANGUAGE OverloadedStrings,LambdaCase #-}
 module FokShell where
 
-import FokShell.InputHandling (nextEvent)
-
-
 import qualified Data.Text as T
 import System.IO (hSetEcho, hSetBuffering, stdin, BufferMode (NoBuffering), hFlush, stdout)
 
@@ -20,45 +17,50 @@ import Lib.Primitive
 import Lib.Keys
 import FokShell.Types
 
-import Data.Dynamic (fromDynamic)
-import Data.Maybe (fromMaybe)
-import FokShell.Module (chainHook, initHook, postHook, preHook, chainEventHook)
+import FokShell.Module (chainHook, initHook, postHook, preHook, chainEventHook, Configurable (configure), configureModule)
 import Control.Concurrent.STM
-import Control.Monad (when)
+import Control.Monad (forever)
+import Control.Concurrent (forkIO, writeChan, newChan, Chan, readChan)
+import FokShell.InputHandling (stdinEvent)
+import Control.Monad.Reader (ReaderT(runReaderT), asks, MonadIO (liftIO))
+import Control.Monad.Except (runExceptT)
 
 
-handleInterrupt :: TVar ShellConfig -> MVar () -> IO ()
-handleInterrupt configVar done = do
+handleInterrupt :: Chan KeyEvent -> IO ()
+handleInterrupt chan = do
   let ctrlCEvent = (control, Character "c")
-  parseEvent configVar ctrlCEvent
-  putMVar done ()
+  writeChan chan ctrlCEvent
 
-fokshell :: ShellConfig -> IO ()
+fokshell :: FokShell -> IO ()
 fokshell config = do
   hSetEcho stdin False
   hSetBuffering stdin NoBuffering
-  configVar <- newTVarIO config
-  --proc <- updatePath $ ShellProcess {shellConfig = config, shellState = InputOutput, shellCache = Cache []}
-  chainHook configVar initHook
-  --shellProcRef <- newIORef p --{shellConfig = p.shellConfig {modules = modules}}
 
-  done <- newEmptyMVar
-  _ <- installHandler sigINT (Catch $ handleInterrupt configVar done) Nothing
-  eventLoop configVar
+  envModules <- newTVarIO =<< mapM configureModule config.modules
+  eventChan <- newChan
+  void . forkIO . forever $ do
+    event <- stdinEvent
+    writeChan eventChan event
 
-eventLoop :: TVar ShellConfig -> IO ()
-eventLoop configVar = do
+  -- todo: make it a module horray
+  _ <- installHandler sigINT (Catch $ handleInterrupt eventChan) Nothing
+  let env = ShellEnv{envModules, eventChan}
+  (`runReaderT` env) $ do
+    void . runExceptT $ (chainHook initHook :: ShellAction ())
+    eventLoop
+nextEvent :: Shell KeyEvent
+nextEvent = liftIO . readChan =<< asks eventChan
 
-  -- implement reversion (event -> string), or also pass the raw string here.
-  -- this will help with a job handler.
+eventLoop :: Shell ()
+eventLoop = do
   event <- nextEvent
-  parseEvent configVar event
-  eventLoop configVar
+  parseEvent event
+  eventLoop
 
-parseEvent :: TVar ShellConfig -> KeyEvent -> IO () 
-parseEvent conf key = do 
-  b <- chainEventHook conf preHook key
-  config <- atomically $ readTVar conf
+parseEvent :: KeyEvent -> Shell () 
+parseEvent key = do 
+  _b <- runExceptT $ (chainEventHook preHook key :: ShellAction Bool)
+  {-config <- atomically $ readTVar conf
   when b $ do
     case key of
       (KeyModifiers 0, Arrow d) -> case d of
@@ -85,18 +87,19 @@ parseEvent conf key = do
         let bind = filter (\x -> fst x == key) $ binds config
         case bind of
           (x:_) -> snd x conf
-          _ -> pure ()
-  b' <- chainEventHook conf postHook key
-  config <- atomically $ readTVar conf
-  atomically $ writeTVar conf config {lastEvent = key}
+          _ -> pure ()-}
+  _b' <- runExceptT $ (chainEventHook postHook key :: ShellAction Bool)
+  --config <- atomically $ readTVar conf
+  pure ()
+  {-atomically $ writeTVar conf config {lastEvent = key}
     where
     addToInput c t = c {input = T.concat [left, t, right]}
       where
         loc = cursorLoc c 
         inp = input c
         right = T.reverse $ T.take loc $ T.reverse inp
-        left  = T.take (T.length inp - T.length right) inp
+        left  = T.take (T.length inp - T.length right) inp-}
     
-    executablelist' :: ShellProcess -> [T.Text]
-    executablelist' p = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache p) "executables" >>= \x -> lookupCache x "execs")
+    {-executablelist' :: ShellProcess -> [T.Text]
+    executablelist' p = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache p) "executables" >>= \x -> lookupCache x "execs")-}
 

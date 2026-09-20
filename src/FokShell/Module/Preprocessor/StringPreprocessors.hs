@@ -13,6 +13,7 @@ import System.Environment.Blank (getEnv)
 import Data.Functor ((<&>))
 import Control.Applicative
 import Data.Data (Proxy(Proxy))
+{-
 import FokShell.Types (ShellConfig)
 
 substituter :: T.Text -> (ShellConfig -> IO T.Text) -> Int -> Preprocessor
@@ -70,4 +71,4 @@ limitedParser :: Parser T.Text
 limitedParser = spanPForce (`notElem` (" ${}/" :: String))
 
 clauseParser :: Parser T.Text
-clauseParser = charP '{' *> basicParser <* charP '}'
+clauseParser = charP '{' *> basicParser <* charP '}'-}

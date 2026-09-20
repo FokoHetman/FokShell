@@ -11,8 +11,8 @@ import Lib.Keys
 import Lib.Format
 import Debug.Trace (traceShow)
 
-nextEvent :: IO KeyEvent
-nextEvent = stringToKeyEvent <$> getInputString
+stdinEvent :: IO KeyEvent
+stdinEvent = stringToKeyEvent <$> getInputString
 
 getInputString :: IO String
 getInputString = do

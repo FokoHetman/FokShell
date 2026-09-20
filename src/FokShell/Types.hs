@@ -3,7 +3,7 @@ module FokShell.Types where
 
 import Lib.Primitive
 import qualified Data.Text as T
-import Data.Dynamic (Dynamic, fromDynamic)
+import Data.Dynamic (Dynamic, fromDynamic, Typeable)
 import Lib.Keys
 import System.Process
 import System.Directory (doesDirectoryExist, doesFileExist)
@@ -17,16 +17,14 @@ import Data.Maybe (fromMaybe)
 import FokShell.Module qualified as Module
 import Control.Exception (catch)
 import System.IO.Error (ioeGetErrorType, ioeGetErrorString, ioeGetFileName)
-import Control.Concurrent.STM (TVar)
+import Control.Concurrent.STM (TVar, readTVar, atomically, readTVarIO)
 
 import Data.Map qualified as Map
 import Control.Concurrent.Async (async, Async)
 import System.Posix (Fd)
-import Control.Monad.IO.Class (MonadIO)
-
--- DefaultIO class {{{
-class DefaultIO a where defM :: MonadIO m => m a
--- }}}
+import Control.Monad.Reader (ReaderT, asks, MonadIO (liftIO))
+import Control.Monad.Except (ExceptT)
+import Control.Concurrent (Chan)
 
 -- process datatypes {{{
 data Process = Process {
@@ -60,13 +58,34 @@ data Job = Job {
 }
 -- }}}
 
-data ShellProcess = ShellProcess {
+data CommandEnvironment = CommandEnvironment
+  { standardInput :: TaskPipeType
+  , standardOutput:: TaskPipeType
+  , standardError :: TaskPipeType
+  }
+
+{-data ShellProcess = ShellProcess {
     shellConfig :: ShellConfig
   , shellCache  :: Cache T.Text (Cache T.Text Dynamic)
-}
+}-}
 
-type Action = TVar ShellConfig -> IO ()
-type Builtin = [T.Text] -> (TaskPipeType, TaskPipeType, TaskPipeType) -> TVar ShellConfig -> IO ExitCode
+data ShellError = ModuleNotFoundError | Unknown String deriving (Eq,Ord,Show)
+
+instance Module.ModuleError ShellError where
+  moduleNotFoundError = ModuleNotFoundError
+
+data ShellEnv = ShellEnv
+  { envModules  :: TVar [Module.Module ShellAction]
+  , eventChan   :: Chan KeyEvent
+  }
+
+type Shell = ReaderT ShellEnv IO
+type ShellAction = ExceptT ShellError Shell
+
+instance Module.ModuleContainer ShellAction where
+  getModules = liftIO . readTVarIO =<< asks envModules
+--type Action = TVar ShellConfig -> IO ()
+--type Builtin = [T.Text] -> (TaskPipeType, TaskPipeType, TaskPipeType) -> TVar ShellConfig -> IO ExitCode
 
 safeGetChar :: Handle -> IO (Maybe Char)
 safeGetChar h =
@@ -85,8 +104,8 @@ forward readh writeh = do
       forward readh writeh
     Nothing -> pure ()
 
-handleProcessException :: ShellConfig -> IOError -> IO Process
-handleProcessException _proc e = do
+handleProcessException :: IOError -> IO Process
+handleProcessException e = do
   traceIO $ fromMaybe "" ((<>": ") <$> ioeGetFileName e) <> ioeGetErrorString e
   let ecode = case ioeGetErrorType e of
             NoSuchThing      -> ExitFailure 127
@@ -114,7 +133,11 @@ safeCheck f p = do
 
   bool (pure True) (f p) (b1 || b2)
 
+data FokShell = FokShell
+  { modules     :: [Module.ModuleConfig ShellAction]
+  }
 
+{-
 data ShellConfig = ShellConfig
   { cursorLoc   :: Int                  -- from the right, surprisingly
   , input       :: T.Text
@@ -123,13 +146,14 @@ data ShellConfig = ShellConfig
   , trigger     :: KeyEvent             -- this should never be overriden globally, locally it should be overwritten with the keyevent trigger (example at ^L handling)
   , builtins    :: Map.Map T.Text Builtin
   --, completionRules :: [CompletionRule]
-  , modules :: [Module.Module ShellConfig]
-  }
+  --, modules :: [Module.Module ShellConfig]
+  }-}
 
-instance Module.ModuleContainer ShellConfig where
-  getModules c = c.modules
+{-instance Module.ModuleContainer ShellConfig where
+  getModules c = c.modules-}
 
+{-
 executablelist :: ShellProcess -> [T.Text]
 executablelist shellproc = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache shellproc) "executables" >>= \x -> lookupCache x "execs")
-
+-}
 -- vim: foldmethod=marker

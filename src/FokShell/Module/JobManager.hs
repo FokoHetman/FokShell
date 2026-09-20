@@ -23,7 +23,7 @@ import Control.Concurrent.Async (cancel, waitCatch)
 import Data.Bool (bool)
 import GHC.IO.Handle (hDuplicateTo)
 import System.IO (stdin, stdout, stderr)
-import Data.Maybe (fromJust)
+import Data.Maybe (fromJust, fromMaybe)
 import Control.Monad (forM_)
 import Debug.Trace (trace)
 
@@ -41,13 +41,30 @@ import Data.IORef (newIORef)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 
 
-data JobManager = JobManager
-  {
-    jobs :: TVar [Job]
-  , jobCounter :: TVar Int
-  , builtins :: Map.Map T.Text Builtin
-  , fd :: Fd
+data JobManagerConfig = JobManagerConfig
+  { builtins :: Map.Map T.Text Builtin
   }
+
+data JobManager = JobManager
+  { jobs :: TVar [Job]
+  , jobCounter :: TVar Int
+  , builtins :: TVar (Map.Map T.Text Builtin)
+  , fd :: TVar Fd
+  }
+
+
+instance Configurable JobManager JobManagerConfig where
+  configure jm = liftIO . atomically $ do
+      jobs <- newTVar []
+      jobCounter <- newTVar 0
+      builtins <- newTVar jm.builtins
+      fd <- newTVar 0
+      pure $ JobManager
+        { jobs
+        , jobCounter
+        , builtins
+        , fd
+        }
 
 jobattach :: Builtin
 jobattach args (h_in, h_out, h_err) conf = do
@@ -73,6 +90,7 @@ jobattach args (h_in, h_out, h_err) conf = do
     Terminal -> case args of
       (x:_) -> (attachToJob . fromJust . findJob . read . T.unpack) x $> ExitSuccess
       _ -> pure $ ExitFailure $ -1
+    File _ _ -> undefined
 
 attachToJob :: Job -> IO ExitCode
 attachToJob Job{tty,inrh, outrh, errrh, exitCode} = do
@@ -129,17 +147,6 @@ jobslist args (h_in, h_out, h_err) conf = do
       _ -> undefined
     _ -> undefined
 
-instance DefaultIO JobManager where
-  defM = liftIO . atomically $ do
-      jobs <- newTVar []
-      jobCounter <- newTVar 0
-      pure $ JobManager
-        { jobs
-        , jobCounter
-        , builtins = def
-        , fd = 0
-        }
-
 instance Module' JobManager ShellConfig where
   initHook' tc conf = do
     fd <- openFd "/dev/tty" ReadWrite defaultFileFlags 
@@ -150,26 +157,26 @@ instance Module' JobManager ShellConfig where
     void $ installHandler sigTTOU Ignore Nothing
     void $ installHandler sigTTIN Ignore Nothing
     void $ installHandler sigTSTP Ignore Nothing
-    atomically . modifyTVar tc $ \tc' -> tc' {builtins = Map.insert "attach" jobattach $ Map.insert "jobs" jobslist tc'.builtins,fd=fd}
+    atomically $ do
+      modifyTVar tc.builtins $ Map.insert "attach" jobattach . Map.insert "jobs" jobslist
+      writeTVar tc.fd fd
   exitHook' _ _ = pure ()
-  resetHook' jm _ = do
-    jmgr <- readTVarIO jm
-    let attachedJobs = filter (\job -> job.attached) jmgr.jobs
+  resetHook' jmgr _ = do
+    jobs <- readTVarIO jmgr.jobs
+    let attachedJobs = filter (\job -> job.attached) jobs
     forM_ attachedJobs $ \job -> readTVarIO job.processes >>= mapM_ (\case
         Process{procHandle,exitCode} -> cancel exitCode >> case procHandle of
           Just x -> terminateProcess x
           Nothing -> pure ()
         BuiltinProcess{exitCode} -> cancel exitCode
         )
-    atomically $ modifyTVar jm $ \jm' -> jm' {jobs=fmap (\job -> job {attached=False}) jm'.jobs}
+    atomically $ modifyTVar jmgr.jobs $ fmap (\job -> job {attached=False})
     pure $ null attachedJobs
   preHook' jm p (KeyModifiers 0, Enter) = do
           putStrLn ""
           conf <- readTVarIO p
           let input' = T.strip $ conf.input
-          parser <- case requestModule @ParserModule conf.modules of
-                    (x:_) -> readTVarIO x
-                    _ -> pure def
+          let parser = fromMaybe def $ head' $ requestModule @ParserModule conf.modules
           let preprocess = connectPreprocessors parser.preprocessors
           let task = runParser parser.parser input' <&> (>>= makeTask) . preprocess conf . snd
           case task of
@@ -187,13 +194,16 @@ instance Module' JobManager ShellConfig where
                   (err_h, errrh) <- do
                     (a,b) <- createPipe
                     make a <&> (,b)
-                  jm' <- readTVarIO jm
                   proclist <- newTVarIO []
+                  
+                  fd <- readTVarIO jm.fd
+                  jobCounter <- readTVarIO jm.jobCounter
+
                   let job = (Job {
-                      tty = jm'.fd 
+                      tty = fd
                     , task = t
                     , attached = False
-                    , jobid = jm'.jobCounter
+                    , jobid = jobCounter
                     , exitCode = Nothing
                     , processes = proclist
                     , inh = in_h
@@ -206,23 +216,27 @@ instance Module' JobManager ShellConfig where
                   atomically $ modifyTVar p $ \p' -> p' {input="", cursorLoc=0}
                   ecode <- spawnJob job p
                   let job' = (job :: Job) {exitCode = Just ecode}
-                  jm' <- readTVarIO jm
-                  T.putStrLn $ "[" <> T.show jm'.jobCounter <> "] Spawned a background job."
-                  atomically . modifyTVar jm $ \jm' -> jm' {jobs = job':jm'.jobs, jobCounter = jm'.jobCounter + 1}
+                  T.putStrLn $ "[" <> T.show jobCounter <> "] Spawned a background job."
+                  atomically $ do
+                    modifyTVar jm.jobs $ (job':)
+                    modifyTVar jm.jobCounter $ (+ 1)
                   displayPrompt' =<< readTVarIO p
                   pure False
                 )
                 (do
                   shellPgid <- getProcessGroupID
-                  jm' <- readTVarIO jm
                   proclist <- newTVarIO []
-                  let job = (Job jm'.fd t True jm'.jobCounter Nothing proclist Terminal Terminal Terminal Nothing Nothing Nothing)
+                  fd <- readTVarIO jm.fd
+                  jobCounter <- readTVarIO jm.jobCounter
+                  let job = (Job fd t True jobCounter Nothing proclist Terminal Terminal Terminal Nothing Nothing Nothing)
                   atomically $ modifyTVar p $ \p' -> p' {input="", cursorLoc=0}
                   a <- spawnJob job p
                   let job' = (job :: Job) {exitCode = Just a}
-                  atomically . modifyTVar jm $ \jm' -> jm' {jobs = job':jm'.jobs, jobCounter = jm'.jobCounter + 1}
+                  atomically $ do
+                    modifyTVar jm.jobs $ (job':)
+                    modifyTVar jm.jobCounter $ (+ 1)
                   _ <- waitCatch a
-                  setTerminalProcessGroupID jm'.fd shellPgid
+                  setTerminalProcessGroupID fd shellPgid
                   displayPrompt' =<< readTVarIO p
                   pure False
                 )
@@ -277,9 +291,7 @@ executeTask fd conf' t = do
   let name = t.procName
   let args = t.procArgs
   conf <- readTVarIO conf'
-  builtins <- case requestModule @JobManager conf.modules of
-    (x:_) -> (.builtins) <$> readTVarIO x
-    _ -> pure Map.empty
+  builtins <- atomically $ fromMaybe (pure $ Map.empty) $ readTVar . (.builtins) <$> head' (requestModule @JobManager conf.modules)
   case Map.lookup name builtins of
     Just x  -> do
       action <- async $ x args (t.pipeIn, t.pipeOut, t.pipeErr) conf'

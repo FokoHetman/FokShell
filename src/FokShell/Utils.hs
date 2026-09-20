@@ -7,7 +7,7 @@ import Control.Monad (when, filterM)
 import System.Directory (getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesFileExist, canonicalizePath)
 import System.Posix (getEnv)
 import System.FilePath (takeFileName)
-import Data.Dynamic (toDyn)
+import Data.Dynamic (toDyn, Typeable)
 import Data.Functor
 import Lib.Primitive
 import Lib.Format
@@ -22,6 +22,10 @@ import Data.Map qualified as Map
 import Data.List (intersperse)
 import Data.Bool (bool)
 import Control.Concurrent.STM
+import Control.Monad.IO.Class (MonadIO(liftIO))
+import Control.Monad.RWS (asks)
+import qualified FokShell.Module as Module
+import Control.Monad.Error.Class (MonadError(throwError))
 
 
 writeText :: T.Text -> TaskPipeType -> IO ()
@@ -42,6 +46,7 @@ getExecutables = do
   pathExecs <- (mapM canonicalizePath . concat) pathExecutableSets <&> fmap takeFileName
   pure $ pathExecs <> localExecutables
 
+{-
 updatePath :: ShellProcess -> IO ShellProcess 
 updatePath proc = do
   path <- getEnv "PATH" >>= \case
@@ -56,7 +61,7 @@ updatePath proc = do
   
   where
     pathExecusets = mapM executablesInDir =<< getDirsInPath
-
+-}
 exitCodeToInt :: ExitCode -> Int
 exitCodeToInt ExitSuccess     = 0
 exitCodeToInt (ExitFailure c) = c
@@ -65,26 +70,26 @@ clearLines :: Direction -> Int -> IO ()
 clearLines _ 0 = putStr "\ESC[2K\r"
 clearLines d i = putStr "\ESC[2K\r" >> moveCursor d 1 >> clearLines d (i-1)
 
-redrawFromCursor :: ShellConfig -> IO ()
-redrawFromCursor c = putStrf $ T.concat [erase, lefts, cursorCode]
+{-
+redrawFromCursor :: IO ()
+redrawFromCursor = putStrf $ T.concat [erase, lefts, cursorCode]
   where
     erase = T.pack "\ESC[0K"
     lefts = T.reverse $ T.take (cursorLoc c) (T.reverse $ input c)
     cursorCode = if T.length lefts > 0 then T.concat ["\ESC[", T.pack $ show $ T.length lefts, "D"] else T.empty
-
-moveCursor' :: TVar ShellConfig -> Direction -> Int -> IO ()
-moveCursor' c' DLeft  i = do
-  c <- atomically $ readTVar c'
+-}
+{-
+moveCursor' :: Direction -> Int -> IO ()
+moveCursor' DLeft i = do
   when (T.length (c.input) - i >= c.cursorLoc) $ do
     atomically $ modifyTVar c' $ \x -> x {cursorLoc = c.cursorLoc + i}
     moveCursor DLeft i
-moveCursor' c' DRight i = do
-  c <- atomically $ readTVar c'
+moveCursor'  DRight i = do
   when (c.cursorLoc >= i) $ do
-    atomically $ modifyTVar c' $ \x -> x {cursorLoc = c.cursorLoc - i}
+    --atomically $ modifyTVar c' $ \x -> x {cursorLoc = c.cursorLoc - i}
     moveCursor DRight i
-moveCursor' _ _ _ = error "unsupported '-wrapped direction"
-
+moveCursor' _ _ = error "unsupported '-wrapped direction"
+-}
 {-
 mkTask' :: T.Text -> Maybe (IO Task)
 mkTask' t = runParser parseSeq t <&> mkTask . snd
@@ -143,8 +148,10 @@ mkTask x = error $ "unknown task: " <> show x
 {-modifyModule' :: forall a. (Module.Module' a ShellConfig,Typeable a) => Proxy a -> ShellConfig -> (a -> a) -> ShellConfig
 modifyModule' p conf f = conf {modules = m} where m = Module.modifyModule p conf.modules f
 -}
+{-
 updateWithKey :: KeyEvent -> ShellConfig -> ShellConfig
 updateWithKey event config = config {lastEvent=event}
+-}
 
 setToJson :: (Map.Map Node Node) -> T.Text
 setToJson t = "{" <> T.concat (intersperse ",\n" $ fmap display' $ Map.toList t) <> "}"
@@ -155,10 +162,30 @@ displaySet t = T.putStrLn $ T.concat $ intersperse "\n" $ fmap display' $ Map.to
 display' :: (Node, Node) -> T.Text
 display' (n1, n2) = nodeToText n1 <> ": " <> nodeToText n2
 
+head' :: [a] -> Maybe a
 head' [] = Nothing
 head' (x:_) = Just x
+tail' :: [a] -> Maybe [a]
 tail' [] = Nothing
 tail' (_:xs) = Just xs
 
-
+bool' :: Bool -> a -> a -> a
 bool' a b c = bool b c a
+
+get :: forall a. (Module.Module' a ShellAction, Typeable a) => ShellAction a
+get = do
+  modules <- liftIO . atomically . readTVar =<< asks envModules
+  case head' $ Module.requestModule @a modules of
+    Just x -> pure x
+    _ -> throwError ModuleNotFoundError
+
+getOr :: forall a. (Module.Module' a ShellAction, Typeable a) => a -> ShellAction a
+getOr y = do
+  modules <- liftIO . atomically . readTVar =<< asks envModules
+  case head' $ Module.requestModule @a modules of
+    Just x -> pure x
+    _ -> pure y
+getMaybe :: forall a. (Module.Module' a ShellAction, Typeable a) => ShellAction (Maybe a)
+getMaybe = do
+  modules <- liftIO . atomically . readTVar =<< asks envModules
+  pure $ head' $ Module.requestModule @a modules

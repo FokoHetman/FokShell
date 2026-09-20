@@ -6,21 +6,21 @@ import Lib.Primitive
 import Control.Applicative
 import Data.Text qualified as T
 
-import FokShell.Types (ShellConfig)
 import FokShell.Module
 import FokShell.Module.Preprocessor
 import FokShell.Module.Preprocessor.StringPreprocessors
 import System.Directory (getHomeDirectory)
+import FokShell.Types
 
 data ParserModule = ParserModule
   { parser :: Parser Node
-  , preprocessors :: [Preprocessor]
+  --, preprocessors :: [Preprocessor]
   }
 
 instance Def ParserModule where
   def = ParserModule
     { parser = r4
-    , preprocessors = [connectPreprocessors [substituteprefix "~" (const $ T.pack <$> getHomeDirectory), envVarPreprocessor]]
+    --, preprocessors = [connectPreprocessors [substituteprefix "~" (const $ T.pack <$> getHomeDirectory), envVarPreprocessor]]
     }
 r0,r1,r2,r3,r4 :: Parser Node
 r0 = primitives empty
@@ -29,12 +29,12 @@ r2 = pipes r1 <|> r1
 r3 = chains r2 <|> r2
 r4 = detach r3 <|> r3
 
-instance Module' ParserModule ShellConfig where
-  initHook' _ _ = pure ()
-  exitHook' _ _ = pure ()
-  resetHook' _ _ = pure True
-  preHook' _ _ _ = pure True
-  postHook' _ _ _ = pure True
+instance Module' ParserModule ShellAction where
+  initHook' _ = pure ()
+  exitHook' _ = pure ()
+  resetHook' _ = pure True
+  preHook' _ _ = pure True
+  postHook' _ _ = pure True
 
 primitives, pcall, pipes, chains, detach :: Parser Node -> Parser Node
 primitives lower = Node <$> (parse lower :: Parser Primitive)

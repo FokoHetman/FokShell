@@ -67,6 +67,7 @@ library
                     , FokShell.Module.Cursor
                     , FokShell.Module.DirectoryTracker
                     , FokShell.Module.History
+                    , FokShell.Module.Input
                     , FokShell.Module.JobManager
                     , FokShell.Module.Movements
                     , FokShell.Module.Parser
@@ -106,6 +107,7 @@ library
                     , stm
                     , array
                     , terminal-size
+                    , mtl
 
     -- Directories containing source files.
     hs-source-dirs:   src

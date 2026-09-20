@@ -1,45 +1,51 @@
-{-# LANGUAGE GADTs, ScopedTypeVariables, AllowAmbiguousTypes #-}
+{-# LANGUAGE GADTs, ScopedTypeVariables, AllowAmbiguousTypes, FunctionalDependencies #-}
 module FokShell.Module where
 import Lib.Keys (KeyEvent)
 import Data.Bool (bool)
 import Data.Maybe
 import Data.Proxy
 import Data.Typeable
-import Control.Concurrent.STM
+import Control.Monad.Error.Class (MonadError (catchError))
 
-class ModuleContainer p where
-  getModules   :: p -> [Module p]
+class ModuleError e where
+  moduleNotFoundError :: e
 
-class Configurable runtime conf where
+class ModuleContainer m where
+  getModules   :: m [Module m]
+
+class Configurable runtime conf | conf -> runtime where
   configure :: conf -> IO runtime
 
-data ModuleConfig where ModuleConfig :: (Configurable runtime conf, Module' runtime proc) => conf -> ModuleConfig
+data ModuleConfig m where ModuleConfig :: (Configurable runtime conf, Module' runtime m, Typeable runtime) => conf -> ModuleConfig m
 
-class Module' a proc where
+configureModule :: ModuleConfig m -> IO (Module m)
+configureModule (ModuleConfig c) = Module <$> configure c
+
+class Monad m => Module' a m where
   -- | hook called upon shell's startup
-  initHook'    :: a -> TVar proc -> IO ()
+  initHook'    :: a -> m ()
   -- | hook called upon shell exit
-  exitHook'    :: a -> TVar proc -> IO ()
+  exitHook'    :: a -> m ()
   -- | hook called in eg. haltHook, used to restore the default state of the Module
-  resetHook'   :: a -> TVar proc -> IO Bool
+  resetHook'   :: a -> m Bool
   -- | hook called before default processing of keyevents
-  preHook'     :: a -> TVar proc -> KeyEvent -> IO Bool
+  preHook'     :: a -> KeyEvent -> m Bool
   -- | hook called after default processing of keyevents
-  postHook'    :: a -> TVar proc -> KeyEvent -> IO Bool
+  postHook'    :: a -> KeyEvent -> m Bool
 
 data Module p where
   Module :: (Module' a p,Typeable a) => a -> Module p
 
 
-initHook, exitHook :: (Module p) -> TVar p -> IO ()
-initHook (Module a) p = initHook' a p
-exitHook (Module a) p = exitHook' a p
-resetHook :: Module p -> TVar p -> IO Bool
-resetHook (Module a) p = resetHook' a p
+initHook, exitHook :: (Module m) -> m ()
+initHook (Module a) = initHook' a
+exitHook (Module a) = exitHook' a
+resetHook :: Module m -> m Bool
+resetHook (Module a) = resetHook' a
 
-preHook, postHook :: Module p -> TVar p -> KeyEvent -> IO Bool
-preHook (Module a) p e = preHook' a p e
-postHook (Module a) p e = postHook' a p e
+preHook, postHook :: Module m -> KeyEvent -> m Bool
+preHook (Module a) e = preHook' a e
+postHook (Module a) e = postHook' a e
 {- This is such a nice system I'm sad I'm replacing it
 class ModuleContainer p where
   getModules :: p -> [Module p]
@@ -83,38 +89,38 @@ chainEventHook p hook event = go p $ length $ getModules p
           bool (pure (b,p'')) (go p'' (x-1)) b
 -}
 
-chainHook :: forall p. ModuleContainer p => TVar p -> (Module p -> TVar p -> IO ()) -> IO ()
-chainHook pvar hook = do
-  modules <- getModules <$> atomically (readTVar pvar)
-  chainHookL modules pvar hook
+chainHook :: forall e m. (Monad m, ModuleError e, MonadError e m, ModuleContainer m) => (Module m -> m ()) -> m ()
+chainHook hook = do
+  modules <- getModules
+  chainHookL modules hook
 
-chainBoolHook :: forall p. ModuleContainer p => TVar p -> (Module p -> TVar p -> IO Bool) -> IO Bool
-chainBoolHook pvar hook = do
-  modules <- getModules <$> atomically (readTVar pvar)
-  chainBoolHookL modules pvar hook
-
-
-chainEventHook :: forall p. ModuleContainer p => TVar p -> (Module p -> TVar p -> KeyEvent -> IO Bool) -> KeyEvent -> IO Bool
-chainEventHook pvar hook event = do
-  modules <- getModules <$> atomically (readTVar pvar)
-  chainEventHookL modules pvar hook event
+chainBoolHook :: forall e m. (Monad m, ModuleError e, MonadError e m, ModuleContainer m) => (Module m -> m Bool) -> m Bool
+chainBoolHook hook = do
+  modules <- getModules
+  chainBoolHookL modules hook
 
 
-chainHookL :: forall p. [Module p] -> TVar p -> (Module p -> TVar p -> IO ()) -> IO ()
-chainHookL [] _ _ = pure ()
-chainHookL (m:ms) p hook = hook m p >> chainHookL ms p hook
+chainEventHook :: forall e m. (Monad m, ModuleError e, MonadError e m, ModuleContainer m) => (Module m -> KeyEvent -> m Bool) -> KeyEvent -> m Bool
+chainEventHook hook event = do
+  modules <- getModules
+  chainEventHookL modules hook event
 
-chainEventHookL :: forall p. [Module p] -> TVar p -> (Module p -> TVar p -> KeyEvent -> IO Bool) -> KeyEvent -> IO Bool
-chainEventHookL [] _ _ _ = pure True
-chainEventHookL (m:ms) p hook e = do
-  b <- hook m p e
-  bool (pure False) (chainEventHookL ms p hook e) b
 
-chainBoolHookL :: forall p. [Module p] -> TVar p -> (Module p -> TVar p -> IO Bool) -> IO Bool
-chainBoolHookL [] _ _ = pure True
-chainBoolHookL (m:ms) p hook = do
-  b <- hook m p
-  bool (pure False) (chainBoolHookL ms p hook) b
+chainHookL :: forall e m. (Monad m, ModuleError e, MonadError e m) => [Module m] -> (Module m -> m ()) -> m ()
+chainHookL [] _ = pure ()
+chainHookL (m:ms) hook = (hook m `catchError` const (pure ())) >> chainHookL ms hook
+
+chainEventHookL :: forall e m. (Monad m, ModuleError e, MonadError e m) => [Module m] -> (Module m -> KeyEvent -> m Bool) -> KeyEvent -> m Bool
+chainEventHookL [] _ _ = pure True
+chainEventHookL (m:ms) hook e = do
+  b <- hook m e `catchError` const (pure True)
+  bool (pure False) (chainEventHookL ms hook e) b
+
+chainBoolHookL :: forall e m. (Monad m, ModuleError e, MonadError e m) => [Module m] -> (Module m -> m Bool) -> m Bool
+chainBoolHookL [] _ = pure True
+chainBoolHookL (m:ms) hook = do
+  b <- hook m `catchError` const (pure True)
+  bool (pure False) (chainBoolHookL ms hook) b
 
 
 
@@ -122,7 +128,6 @@ chainBoolHookL (m:ms) p hook = do
 withProxy :: forall i p. Typeable i => Proxy i -> Module p -> Maybe i
 withProxy _ (Module a) = cast a
 
--- todo: convert to this
 withType :: forall i p. Typeable i => Module p -> Maybe i
 withType (Module a) = cast a
 

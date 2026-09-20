@@ -4,11 +4,12 @@ import Lib.Primitive
 import FokShell.Module.Colorscheme
 import GHC.IO.Handle (hFlush)
 import System.IO (stdout)
-import FokShell.Types (ShellConfig)
+import FokShell.Types
 import FokShell.Module
 
 import Data.Functor
 import Control.Concurrent.STM (newTVar, TVar, atomically, readTVarIO)
+import Control.Monad.IO.Class (MonadIO(liftIO))
 
 data CursorConfig = CursorConfig
   {
@@ -28,12 +29,12 @@ instance Configurable Cursor CursorConfig where
     color <- newTVar conf.color
     pure Cursor {..}
 
-instance Module' Cursor ShellConfig where
-  initHook' tc _ = mkCursor tc
-  exitHook' _ _ = pure ()
-  resetHook' tc _ = mkCursor tc $> True
-  preHook' _ _ _ = pure True
-  postHook' tc _ _ = mkCursor tc $> True
+instance Module' Cursor ShellAction where
+  initHook' tc = liftIO $ mkCursor tc
+  exitHook' _ = pure ()
+  resetHook' tc = liftIO $ mkCursor tc $> True
+  preHook' _ _ = pure True
+  postHook' tc _ = liftIO $ mkCursor tc $> True
 
 mkCursor :: Cursor -> IO ()
 mkCursor Cursor{shape,color} = do
