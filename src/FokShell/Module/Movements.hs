@@ -15,18 +15,24 @@ import FokShell.Module.Input
 import Control.Monad.IO.Class (MonadIO(liftIO))
 
 data Movements = Movements
-  {
-    jumpMod :: Maybe KeyModifiers
+  { jumpMod :: Maybe KeyModifiers
   }
-instance Def Movements where
-  def = Movements
+data MovementsConfig = MovementsConfig
+  { jumpMod :: Maybe KeyModifiers
+  }
+instance Def MovementsConfig where
+  def = MovementsConfig
     { jumpMod = Just control
     }
+
+instance Configurable Movements MovementsConfig where
+  configure MovementsConfig{jumpMod} = pure Movements {jumpMod}
+
 instance Module' Movements ShellAction where
-  initHook' _tc = pure ()
-  resetHook' _tc = pure True
-  exitHook' _tc = pure ()
-  preHook' m (modf,Arrow d) = do
+  initHook _tc = pure ()
+  resetHook _tc = pure True
+  exitHook _tc = pure ()
+  preHook m (modf,Arrow d) = do
     inputM <- get @Input
     input <- liftIO $ readTVarIO inputM.input
     cursorLocation <- liftIO $ readTVarIO inputM.cursorLocation
@@ -46,5 +52,5 @@ instance Module' Movements ShellAction where
           _ -> 0
         x -> -T.length x
       n _ _ _ = undefined
-  preHook' _tc _ = pure True
-  postHook' _tc _ = pure True
+  preHook _tc _ = pure True
+  postHook _tc _ = pure True

@@ -4,7 +4,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
 import Control.Monad (when, filterM)
-import System.Directory (getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesFileExist, canonicalizePath)
+import System.Directory (getCurrentDirectory, getDirectoryContents, getPermissions, Permissions (executable), doesFileExist, canonicalizePath, doesDirectoryExist)
 import System.Posix (getEnv)
 import System.FilePath (takeFileName)
 import Data.Dynamic (toDyn, Typeable)
@@ -19,7 +19,7 @@ import System.IO (openFile)
 import Control.Concurrent (isEmptyMVar, putMVar, swapMVar, readMVar)
 
 import Data.Map qualified as Map
-import Data.List (intersperse)
+import Data.List (intersperse, sort, group)
 import Data.Bool (bool)
 import Control.Concurrent.STM
 import Control.Monad.IO.Class (MonadIO(liftIO))
@@ -27,16 +27,6 @@ import Control.Monad.RWS (asks)
 import qualified FokShell.Module as Module
 import Control.Monad.Error.Class (MonadError(throwError))
 
-
-writeText :: T.Text -> TaskPipeType -> IO ()
-writeText t Terminal = T.putStr t
-writeText t (File path mode) = openFile path mode >>= (`T.hPutStr` t)
-writeText t (ProcessData m) = isEmptyMVar m >>= bool
-  (readMVar m >>= \case
-    Left _ -> void . swapMVar m . Left . Node $ NodeString t SingleQuote
-    Right h -> T.hPutStr h t
-  )
-  (putMVar m . Left . Node $ NodeString t SingleQuote)
 
 getExecutables :: IO [FilePath]
 getExecutables = do
@@ -153,15 +143,6 @@ updateWithKey :: KeyEvent -> ShellConfig -> ShellConfig
 updateWithKey event config = config {lastEvent=event}
 -}
 
-setToJson :: (Map.Map Node Node) -> T.Text
-setToJson t = "{" <> T.concat (intersperse ",\n" $ fmap display' $ Map.toList t) <> "}"
-
-displaySet :: (Map.Map Node Node) -> IO ()
-displaySet t = T.putStrLn $ T.concat $ intersperse "\n" $ fmap display' $ Map.toList t
-
-display' :: (Node, Node) -> T.Text
-display' (n1, n2) = nodeToText n1 <> ": " <> nodeToText n2
-
 head' :: [a] -> Maybe a
 head' [] = Nothing
 head' (x:_) = Just x
@@ -171,6 +152,18 @@ tail' (_:xs) = Just xs
 
 bool' :: Bool -> a -> a -> a
 bool' a b c = bool b c a
+
+count :: Eq a => [a] -> a -> Int
+count xs find = length (filter (== find) xs)
+
+dedup :: Ord a => [a] -> [a]
+dedup = map head . group . sort
+
+safeCheck :: (FilePath -> IO Bool) -> FilePath -> IO Bool
+safeCheck f p = do
+  b1 <- doesFileExist p
+  b2 <- doesDirectoryExist p
+  bool (pure True) (f p) (b1 || b2)
 
 get :: forall a. (Module.Module' a ShellAction, Typeable a) => ShellAction a
 get = do
@@ -189,3 +182,8 @@ getMaybe :: forall a. (Module.Module' a ShellAction, Typeable a) => ShellAction 
 getMaybe = do
   modules <- liftIO . atomically . readTVar =<< asks envModules
   pure $ head' $ Module.requestModule @a modules
+
+with :: forall a. (Module.Module' a ShellAction, Typeable a) => (a -> ShellAction ()) -> ShellAction ()
+with f = getMaybe @a >>= \case
+  Just x -> f x
+  Nothing -> pure ()

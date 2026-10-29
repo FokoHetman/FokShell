@@ -20,7 +20,7 @@ import FokShell.Module (requestModule)
 import Control.Concurrent.STM (modifyTVar, atomically, TVar, readTVarIO)
 import Lib.Primitive
 
-
+{-
 -- builtins {{{
 
 cd, regex :: [T.Text] -> (TaskPipeType,TaskPipeType,TaskPipeType) -> TVar ShellConfig -> IO (ExitCode)
@@ -153,5 +153,5 @@ instance Def (Map.Map T.Text Builtin) where
       ("cd", cd)
     , ("regex", regex)
     ]
-
+-}
 -- vim: foldmethod=marker

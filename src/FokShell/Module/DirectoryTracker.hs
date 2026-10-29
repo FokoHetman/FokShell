@@ -17,6 +17,8 @@ import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 
 data DirectoryTrackerConfig = DirectoryTrackerConfig {}
+instance Def DirectoryTrackerConfig where
+  def = DirectoryTrackerConfig
 data DirectoryTracker = DirectoryTracker
   {
     directories :: TVar [FilePath]
@@ -40,13 +42,13 @@ instance Configurable DirectoryTracker DirectoryTrackerConfig where
 --  _ -> getCurrentDirectory
 
 instance Module' DirectoryTracker ShellAction where
-  initHook' tc = do
+  initHook tc = do
       --let new_p = bool p (modifyModule' (Proxy @ParserModule) p (\mgr -> mgr {preprocessors = directoryPreprocessor:mgr.preprocessors}))
       {-when tc.addPreprocessor $ do
         mapM_ (atomically . (`modifyTVar` \pm -> pm {preprocessors = directoryPreprocessor:pm.preprocessors})) $ requestModule @ParserModule conf'.modules-}
       currentDir <- liftIO getCurrentDirectory
       liftIO . atomically . modifyTVar tc.directories $ (currentDir:)
-  exitHook' tc = pure ()
-  resetHook' tc = pure True
-  preHook' tc _ = pure True
-  postHook' tc _ = pure True
+  exitHook tc = pure ()
+  resetHook tc = pure True
+  preHook tc _ = pure True
+  postHook tc _ = pure True

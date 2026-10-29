@@ -3,29 +3,38 @@
 module FokShell.InputHandling where
 
 import qualified Data.Text as T
-import System.IO (hWaitForInput, stdin)
+import System.IO (hWaitForInput, stdin, Handle, hGetChar, hIsClosed)
 import Data.Char (chr, ord, digitToInt)
 import Data.List (singleton, isPrefixOf)
 
 import Lib.Keys
 import Lib.Format
-import Debug.Trace (traceShow)
+import Debug.Trace (traceShow, traceIO)
+import Control.Exception (catch)
 
-stdinEvent :: IO KeyEvent
-stdinEvent = stringToKeyEvent <$> getInputString
+stdinEvent :: Handle -> IO KeyEvent
+stdinEvent h = stringToKeyEvent <$> getInputString h
 
-getInputString :: IO String
-getInputString = do
-  getChar >>= \case 
+safeGetChar :: Handle -> IO Char
+safeGetChar h =
+    hGetChar h
+    `catch` f
+    where
+      f :: IOError -> IO Char
+      f e = safeGetChar h
+
+getInputString :: Handle -> IO String
+getInputString h = do
+  safeGetChar h >>= \case 
     '\ESC' -> do
       rest <- getLoop
       pure $ '\ESC':rest
     x      -> pure [x]
   where
     getLoop = do
-      more <- hWaitForInput stdin 20
+      more <- hWaitForInput h 20
       if more then do
-        char <- getChar
+        char <- safeGetChar h
         rest <- getLoop
         pure $ char:rest
       else

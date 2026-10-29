@@ -23,29 +23,25 @@ configureModule (ModuleConfig c) = Module <$> configure c
 
 class Monad m => Module' a m where
   -- | hook called upon shell's startup
-  initHook'    :: a -> m ()
+  initHook    :: a -> m ()
   -- | hook called upon shell exit
-  exitHook'    :: a -> m ()
+  exitHook    :: a -> m ()
   -- | hook called in eg. haltHook, used to restore the default state of the Module
-  resetHook'   :: a -> m Bool
+  resetHook   :: a -> m Bool
   -- | hook called before default processing of keyevents
-  preHook'     :: a -> KeyEvent -> m Bool
+  preHook     :: a -> KeyEvent -> m Bool
   -- | hook called after default processing of keyevents
-  postHook'    :: a -> KeyEvent -> m Bool
+  postHook    :: a -> KeyEvent -> m Bool
 
 data Module p where
   Module :: (Module' a p,Typeable a) => a -> Module p
 
-
-initHook, exitHook :: (Module m) -> m ()
-initHook (Module a) = initHook' a
-exitHook (Module a) = exitHook' a
-resetHook :: Module m -> m Bool
-resetHook (Module a) = resetHook' a
-
-preHook, postHook :: Module m -> KeyEvent -> m Bool
-preHook (Module a) e = preHook' a e
-postHook (Module a) e = postHook' a e
+instance Monad m => Module' (Module m) m where
+  initHook (Module a) = initHook a
+  exitHook (Module a) = exitHook a
+  resetHook (Module a) = resetHook a
+  preHook (Module a) = preHook a
+  postHook (Module a) = postHook a
 {- This is such a nice system I'm sad I'm replacing it
 class ModuleContainer p where
   getModules :: p -> [Module p]

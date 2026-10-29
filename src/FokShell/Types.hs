@@ -1,75 +1,103 @@
-{-# LANGUAGE OverloadedStrings, LambdaCase #-}
+{-# LANGUAGE OverloadedStrings, LambdaCase, ExplicitNamespaces #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE KindSignatures #-}
+
 module FokShell.Types where
 
 import Lib.Primitive
 import qualified Data.Text as T
-import Data.Dynamic (Dynamic, fromDynamic, Typeable)
 import Lib.Keys
 import System.Process
-import System.Directory (doesDirectoryExist, doesFileExist)
-import Debug.Trace
 import GHC.IO.Handle
-import Language.Parser
-import GHC.IO.Exception (ExitCode (ExitFailure), IOErrorType (NoSuchThing, PermissionDenied))
-import Data.List (sort, group)
-import Data.Bool (bool)
-import Data.Maybe (fromMaybe)
+import GHC.IO.Exception (ExitCode, IOException)
 import FokShell.Module qualified as Module
-import Control.Exception (catch)
-import System.IO.Error (ioeGetErrorType, ioeGetErrorString, ioeGetFileName)
-import Control.Concurrent.STM (TVar, readTVar, atomically, readTVarIO)
+import Control.Exception (catch, throwIO, try, finally)
+import Control.Concurrent.STM (TVar, readTVarIO, readTBQueue, writeTBQueue, atomically, newTQueueIO, writeTQueue, readTQueue, TMVar)
 
-import Data.Map qualified as Map
-import Control.Concurrent.Async (async, Async)
-import System.Posix (Fd)
-import Control.Monad.Reader (ReaderT, asks, MonadIO (liftIO))
-import Control.Monad.Except (ExceptT)
+import Control.Concurrent.Async (Async, withAsync, link, cancel)
+import System.Posix (Fd, setTerminalProcessGroupID, getProcessGroupIDOf, ProcessGroupID)
+import Control.Monad.Reader (ReaderT (runReaderT, ReaderT), asks, MonadIO (liftIO), MonadReader (ask))
+import Control.Monad.Except (ExceptT (ExceptT), MonadError (throwError), runExceptT)
 import Control.Concurrent (Chan)
+import qualified Data.ByteString as BS
+import GHC.Natural (Natural)
+import Control.Monad (void)
+import System.IO.Error (isResourceVanishedError, catchIOError)
+import Prettyprinter
+import Type.Reflection
+import FokShell.ShellNode
 
--- process datatypes {{{
-data Process = Process {
-  pid       :: Maybe Pid
-, procHandle:: Maybe ProcessHandle
-, exitCode  :: Async ExitCode
-, procOuth  :: Maybe Handle
-, procErrh  :: Maybe Handle
-, procInh   :: Maybe Handle
-} | BuiltinProcess {
-  pid       :: Maybe Pid
-, exitCode  :: Async ExitCode
-, procOuth  :: Maybe Handle
-, procErrh  :: Maybe Handle
-, procInh   :: Maybe Handle
-}
 
-data Job = Job {
-  tty :: Fd
-, task :: Task
-, attached :: Bool
-, jobid :: Int
-, exitCode :: Maybe (Async ExitCode)
-, processes :: TVar [Process]
-, outh :: TaskPipeType
-, errh :: TaskPipeType
-, inh  :: TaskPipeType
-, outrh:: Maybe Handle
-, errrh:: Maybe Handle
-, inrh :: Maybe Handle
-}
--- }}}
+data ShellError = PipelineTypeError Span T.Text | SinkMismatch | SourceMismatch | ModuleNotFoundError | ErrorIO IOError | Unknown String deriving (Eq,Show)
+shellError :: ShellError -> IO ()
+shellError = putStrLn . show
 
-data CommandEnvironment = CommandEnvironment
-  { standardInput :: TaskPipeType
-  , standardOutput:: TaskPipeType
-  , standardError :: TaskPipeType
+
+catchIO :: ShellAction a -> ShellAction a
+catchIO f = ExceptT $ ReaderT $ \env -> runReaderT (runExceptT f) env `catchIOError` \e -> runReaderT (runExceptT (throwError (ErrorIO e) :: ShellAction a)) env
+
+catchIO' :: IO a -> ShellAction a
+catchIO' f = ExceptT $ ReaderT $ \env -> (Right <$> f) `catchIOError` \e -> runReaderT (runExceptT (throwError (ErrorIO e) :: ShellAction a)) env
+
+
+data Span = Span Int Int deriving (Eq,Ord,Show)
+
+data Pipeline i o where
+  Stage  :: (Typeable i, Typeable o, PrettyAnn ShellAnn o) => Process i o -> [T.Text] -> Pipeline i o
+  Adapter :: (Typeable i, Typeable o1, PrettyAnn ShellAnn o, PrettyAnn ShellAnn o1) => (o1 -> ShellAction o) -> Pipeline i o1 -> Pipeline i o
+  Then   :: (Typeable i, Typeable mid, Typeable o, PrettyAnn ShellAnn mid, PrettyAnn ShellAnn o) => Pipeline i mid -> Pipeline mid o -> Pipeline i o
+  Followed :: (Typeable i, Typeable o, PrettyAnn ShellAnn o) => Pipeline i o -> Pipeline i o -> (ExitCode -> ShellAction Bool) -> Pipeline i o
+
+type Process input output = [T.Text] -> Source input -> Sink output -> ShellAction ExitCode
+
+infixr 1 >->
+(>->) :: (Typeable i, Typeable mid, Typeable o, PrettyAnn ShellAnn mid, PrettyAnn ShellAnn o) => Pipeline i mid -> Pipeline mid o -> Pipeline i o
+(>->) = Then
+
+newTypedPipe :: MonadIO m => m (Source a, Sink a)
+newTypedPipe = do
+  queue <- liftIO newTQueueIO
+  let source = Source {pull = atomically (readTQueue queue), rawOverride = Nothing}
+      sink = Sink
+        { push = atomically . writeTQueue queue . Just
+        , finish = atomically $ writeTQueue queue Nothing
+        , rawOverride = Nothing
+        }
+  pure (source, sink)
+
+data SomeProcess where
+  SomeProcess :: (Typeable i, Typeable o, PrettyAnn ShellAnn o) => Process i o -> SomeProcess
+data SomePipeline where
+  SomePipeline :: (Typeable i, Typeable o, PrettyAnn ShellAnn o) => Pipeline i o -> SomePipeline
+
+data Source a = Source
+  { pull :: IO (Maybe a)
+  , rawOverride :: Maybe StdStream
   }
 
-{-data ShellProcess = ShellProcess {
-    shellConfig :: ShellConfig
-  , shellCache  :: Cache T.Text (Cache T.Text Dynamic)
-}-}
+data SomeSource where SomeSource :: Typeable a => Source a -> SomeSource
 
-data ShellError = ModuleNotFoundError | Unknown String deriving (Eq,Ord,Show)
+data Sink a = Sink
+  { push   :: a -> IO ()
+  , finish :: IO ()
+  , rawOverride :: Maybe StdStream
+  }
+
+data SomeSink where SomeSink :: Typeable a => Sink a -> SomeSink
+
+data Job = Job
+  { tty     :: Fd
+  , jobId   :: Int
+  , pipeline:: SomePipeline
+  , processes :: TVar [SomeProcess]
+  }
+data SpawnedJob = SpawnedJob Job (Async (Either ShellError ExitCode))
 
 instance Module.ModuleError ShellError where
   moduleNotFoundError = ModuleNotFoundError
@@ -77,6 +105,10 @@ instance Module.ModuleError ShellError where
 data ShellEnv = ShellEnv
   { envModules  :: TVar [Module.Module ShellAction]
   , eventChan   :: Chan KeyEvent
+  , ttyFd       :: Fd
+  , ttyHandle   :: Handle
+  , ttyLock     :: TMVar ()
+  , pgid        :: ProcessGroupID
   }
 
 type Shell = ReaderT ShellEnv IO
@@ -84,8 +116,6 @@ type ShellAction = ExceptT ShellError Shell
 
 instance Module.ModuleContainer ShellAction where
   getModules = liftIO . readTVarIO =<< asks envModules
---type Action = TVar ShellConfig -> IO ()
---type Builtin = [T.Text] -> (TaskPipeType, TaskPipeType, TaskPipeType) -> TVar ShellConfig -> IO ExitCode
 
 safeGetChar :: Handle -> IO (Maybe Char)
 safeGetChar h =
@@ -104,56 +134,11 @@ forward readh writeh = do
       forward readh writeh
     Nothing -> pure ()
 
-handleProcessException :: IOError -> IO Process
-handleProcessException e = do
-  traceIO $ fromMaybe "" ((<>": ") <$> ioeGetFileName e) <> ioeGetErrorString e
-  let ecode = case ioeGetErrorType e of
-            NoSuchThing      -> ExitFailure 127
-            PermissionDenied -> ExitFailure 126
-            _                -> ExitFailure 1
-  ecode' <- async $ pure ecode
-  pure Process
-    { exitCode = ecode'
-    , pid = Nothing
-    , procHandle = Nothing
-    , procOuth = Nothing
-    , procErrh = Nothing
-    , procInh = Nothing
-    }
-count :: Eq a => [a] -> a -> Int
-count xs find = length (filter (== find) xs)
-
-dedup :: Ord a => [a] -> [a]
-dedup = map head . group . sort
-
-safeCheck :: (FilePath -> IO Bool) -> FilePath -> IO Bool
-safeCheck f p = do
-  b1 <- doesFileExist p
-  b2 <- doesDirectoryExist p
-
-  bool (pure True) (f p) (b1 || b2)
-
 data FokShell = FokShell
   { modules     :: [Module.ModuleConfig ShellAction]
   }
 
-{-
-data ShellConfig = ShellConfig
-  { cursorLoc   :: Int                  -- from the right, surprisingly
-  , input       :: T.Text
-  , binds       :: [(KeyEvent, Action)]
-  , lastEvent   :: KeyEvent
-  , trigger     :: KeyEvent             -- this should never be overriden globally, locally it should be overwritten with the keyevent trigger (example at ^L handling)
-  , builtins    :: Map.Map T.Text Builtin
-  --, completionRules :: [CompletionRule]
-  --, modules :: [Module.Module ShellConfig]
-  }-}
+instance Def FokShell where
+  def = FokShell []
 
-{-instance Module.ModuleContainer ShellConfig where
-  getModules c = c.modules-}
-
-{-
-executablelist :: ShellProcess -> [T.Text]
-executablelist shellproc = maybe [] (fromMaybe [] . fromDynamic) (lookupCache (shellCache shellproc) "executables" >>= \x -> lookupCache x "execs")
--}
 -- vim: foldmethod=marker

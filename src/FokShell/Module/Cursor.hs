@@ -30,11 +30,11 @@ instance Configurable Cursor CursorConfig where
     pure Cursor {..}
 
 instance Module' Cursor ShellAction where
-  initHook' tc = liftIO $ mkCursor tc
-  exitHook' _ = pure ()
-  resetHook' tc = liftIO $ mkCursor tc $> True
-  preHook' _ _ = pure True
-  postHook' tc _ = liftIO $ mkCursor tc $> True
+  initHook tc = liftIO $ mkCursor tc
+  exitHook _ = pure ()
+  resetHook tc = liftIO $ mkCursor tc $> True
+  preHook _ _ = pure True
+  postHook tc _ = liftIO $ mkCursor tc $> True
 
 mkCursor :: Cursor -> IO ()
 mkCursor Cursor{shape,color} = do

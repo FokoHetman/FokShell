@@ -5,8 +5,11 @@ import System.Posix (getEffectiveUserName)
 
 
 import FokShell
+import FokShell.Types
+import Lib.Primitive
 import FokShell.Utils
 import FokShell.Module
+import FokShell.Module.Input
 import FokShell.Module.Colorscheme
 import FokShell.Module.Cursor
 import FokShell.Module.DirectoryTracker
@@ -17,7 +20,44 @@ import FokShell.Module.Parser
 import FokShell.Module.Preprocessor
 import FokShell.Module.Preprocessor.StringPreprocessors
 import FokShell.Module.Prompt
+import FokShell.Module.Binds
 import FokShell.Module.TabCompletion
+import FokShell.Module.Builtins
+
+main :: IO ()
+main = fokshell def
+  { modules =
+    [ ModuleConfig ( def :: DirectoryTrackerConfig)
+    , ModuleConfig ( def :: MovementsConfig)
+    , ModuleConfig ( def :: CursorConfig)
+    , ModuleConfig ( def :: PromptConfig)
+    , ModuleConfig ( def :: ParserConfig)
+    , ModuleConfig ( def :: BuiltinsConfig)
+    , ModuleConfig ( def :: BindsConfig)
+    , ModuleConfig ( def :: HistoryConfig)
+    , ModuleConfig ( def :: JobManagerConfig)
+    , ModuleConfig ( def :: InputConfig)
+    ]
+    {-[ module' (def :: DirectoryTracker)
+      , module' (def :: Movements)
+      , module' myCursor
+      , module' ColorschemeModule 
+        { colorschemes = colorSchemes
+        , current = 0
+        }
+      , module' (def :: TabCompletion)
+        { maxSuggestions = 10
+        , shadowText = True
+        , sortAlgorithm = const sort
+        }
+      , module' (def :: History)
+      , module' (def :: JobManager)
+      , module' (def :: ParserModule)
+      , module' myPrompt
+      ]-}
+  }
+
+{-
 import Lib.Primitive
 import Lib.Format
 import FokShell.Types
@@ -148,3 +188,4 @@ myModules = atomically . sequence $ [ module' (def :: DirectoryTracker)
       , module' (def :: ParserModule)
       , module' myPrompt
       ]
+-}

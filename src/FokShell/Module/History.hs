@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, RecordWildCards #-}
 module FokShell.Module.History where
 
 import Data.Bits qualified as B
@@ -21,7 +21,7 @@ import Data.Functor
 import FokShell.Utils
 
 import Control.Concurrent.STM
-import System.IO (hFlush, stdout)
+import System.IO (hFlush, stdout, stdin)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import FokShell.Module.Input
 
@@ -33,7 +33,7 @@ data HistoryConfig = HistoryConfig
   }
 
 instance Def HistoryConfig where
-  def = historyFile (withHomeDir ".config/fokshell/history") 10000
+  def = historyFile (withHomeDir ".local/state/fokshell/history") 10000
 
 withHomeDir :: FilePath -> IO FilePath
 withHomeDir p = getHomeDirectory <&> (</> p)
@@ -59,63 +59,75 @@ data History = History
   , historyConfig :: HistoryConfig
   }
 
+instance Configurable History HistoryConfig where
+  configure historyConfig = do
+    atomically $ do
+      history <- newTVar []
+      historyIndex <- newTVar Nothing
+      pure History {..}
+
 instance Module' History ShellAction where
-  initHook' m = do
+  initHook m = do
     history <- liftIO m.historyConfig.getHistory
     liftIO . atomically $ writeTVar m.history history
-  exitHook' m = do
+  exitHook m = do
     history <- liftIO $ readTVarIO m.history
     liftIO $ m.historyConfig.writeHistory (take m.historyConfig.entryLimit history)
-  resetHook' m = (liftIO . atomically $ writeTVar m.historyIndex Nothing) $> True
-  preHook' m (KeyModifiers 0, Enter) = do
+  resetHook m = (liftIO . atomically $ writeTVar m.historyIndex Nothing) $> True
+  preHook m (KeyModifiers 0, Enter) = do
     inputM <- get @Input
     input <- liftIO $ readTVarIO inputM.input
     liftIO . atomically $ do
       history <- readTVar m.history
       writeTVar m.history $ m.historyConfig.appendToHistory input history
       writeTVar m.historyIndex Nothing
-      --modifyTVar m $ \m' -> m' {history=m'.appendToHistory p'.input m'.history, historyIndex = Nothing})
     pure True
-  preHook' m (KeyModifiers 0, Arrow Up) = do
+  preHook m (KeyModifiers 0, Arrow Up) = do
     inputM <- get @Input
     input <- liftIO $ readTVarIO inputM.input
     cursorLocation <- liftIO $ readTVarIO inputM.cursorLocation
     when (T.length input - cursorLocation > 0) (moveInputCursor inputM DLeft $ T.length input - cursorLocation)
-    liftIO . atomically $ do
+    newInput <- liftIO . atomically $ do
       historyIndex <- readTVar m.historyIndex
       history <- readTVar m.history
-      case historyIndex of
+      new <- case historyIndex of
           Nothing -> case history of 
-            []      -> pure ()
+            []      -> pure ""
             (x:_)  -> do
               writeTVar m.historyIndex $ Just (0, input)
               writeTVar inputM.input x
+              pure x
           Just (i, r) -> let j = min (length history - 1) (i+1) in do
             writeTVar m.historyIndex $ Just (j, r)
             writeTVar inputM.input $ history !! j
+            pure $ history !! j
       writeTVar inputM.cursorLocation 0
-    redrawFromCursor inputM $ Just $ T.length $ input
-    liftIO $ moveCursor DRight (T.length input) >> hFlush stdout
-    pure True
-  preHook' m (KeyModifiers 0, Arrow Down) = do
+      pure new
+    redrawFromCursor inputM $ Just $ T.length newInput
+    liftIO $ moveCursor DRight (T.length newInput) >> hFlush stdout
+    pure False
+  preHook m (KeyModifiers 0, Arrow Down) = do
     inputM <- get @Input
     input <- liftIO $ readTVarIO inputM.input
     cursorLocation <- liftIO $ readTVarIO inputM.cursorLocation
     when (T.length input - cursorLocation > 0 ) (moveInputCursor inputM DLeft (T.length input - cursorLocation))
-    liftIO . atomically $ do
+    newInput <- liftIO . atomically $ do
       historyIndex <- readTVar m.historyIndex
       history <- readTVar m.history
-      case historyIndex of
-          Nothing -> pure ()
+      new <- case historyIndex of
+          Nothing -> pure ""
           Just (0,r) -> do
             writeTVar m.historyIndex Nothing
             writeTVar inputM.input r
+            pure r
           Just (i, r) -> let j = max 0 (i-1) in do
             writeTVar m.historyIndex $ Just (j, r)
             writeTVar inputM.input $ history !! j
+            pure $ history !! j
       writeTVar inputM.cursorLocation 0
-    redrawFromCursor inputM $ Just $ T.length $ input
-    liftIO $ moveCursor DRight $ T.length $ input
-    pure True
-  preHook' _m  _ = pure True
-  postHook' _m _ = pure True
+      pure new
+    redrawFromCursor inputM $ Just $ T.length $ newInput
+    liftIO $ moveCursor DRight $ T.length $ newInput
+    pure False
+  preHook _m  _ = pure True
+  postHook _m _ = pure True

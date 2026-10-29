@@ -8,6 +8,9 @@ import Lib.Primitive
 import Data.Char (chr)
 import Control.Concurrent.STM (TVar, newTVarIO)
 
+
+-- replace this with Ann
+
 data ColorschemeConfig = ColorschemeConfig
   { colorscheme :: Colorscheme
   }
@@ -22,11 +25,11 @@ instance Configurable ColorschemeModule ColorschemeConfig where
     pure ColorschemeModule{..}
 
 instance Module' ColorschemeModule ShellAction where
-  initHook' _ = pure ()
-  exitHook' _ = pure ()
-  resetHook' _ = pure True
-  preHook' _ _ = pure True
-  postHook' _ _ = pure True
+  initHook _ = pure ()
+  exitHook _ = pure ()
+  resetHook _ = pure True
+  preHook _ _ = pure True
+  postHook _ _ = pure True
 
 -- Types {{{
 

@@ -11,9 +11,13 @@ import Control.Monad (when, unless)
 
 import Data.Functor
 import Data.Maybe (fromMaybe)
+import Lib.Primitive
+import qualified Data.Text.IO as T
+import Debug.Trace (traceIO)
 
 data InputConfig = InputConfig {}
-
+instance Def InputConfig where
+  def = InputConfig
 data Input = Input
   { input :: TVar T.Text
   , cursorLocation :: TVar Int
@@ -80,18 +84,20 @@ instance Configurable Input InputConfig where
     pure Input{..}
 
 instance Module' Input ShellAction where
-  initHook' _ = pure ()
-  exitHook' _ = pure ()
-  resetHook' i = liftIO . atomically $ do
+  initHook _ = pure ()
+  exitHook _ = pure ()
+  resetHook i = liftIO . atomically $ do
     writeTVar i.input ""
     writeTVar i.cursorLocation 0
     pure True
-  preHook' i = \case
+  preHook i = \case
     (KeyModifiers 0, Character c) -> do
       writeInput i c
+      liftIO $ T.putStr c
+      redrawFromCursor i Nothing
       pure False
     (KeyModifiers 0, Arrow DLeft) -> moveInputCursor i DLeft 1 $> False
     (KeyModifiers 0, Arrow DRight) -> moveInputCursor i DRight 1 $> False
-    (KeyModifiers 0, Backspace) -> deleteInput i DLeft 1 $> False
+    (KeyModifiers 0, Backspace) -> deleteInput i DLeft 1 >> redrawFromCursor i Nothing $> False
     _ -> pure True
-  postHook' = undefined
+  postHook _ _ = pure True

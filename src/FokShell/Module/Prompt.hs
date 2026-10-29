@@ -11,7 +11,7 @@ import Network.HostName
 import Lib.Format (getFormattedDirectory)
 import System.Posix (getEffectiveUserName)
 import System.IO (stdout, hFlush)
-import Control.Concurrent.STM (readTVarIO, TVar)
+import Control.Concurrent.STM (readTVarIO, TVar, newTVarIO)
 import Data.Functor
 import Control.Monad.IO.Class (MonadIO(liftIO))
 
@@ -38,6 +38,7 @@ instance Def PromptConfig where
           , dirComponent]
         , p $ t2 "]"
         , p $ t2 clear
+        , p $ t2 "$ "
         ]
         {-fmap (PromptComponent . TextComponent)
           [ (pure "[", foreground . (.textColor))
@@ -55,18 +56,23 @@ data Prompt = Prompt
   { promptComponent :: TVar PromptComponent
   }
 
+instance Configurable Prompt PromptConfig where
+  configure PromptConfig{prompt} = do
+    promptComponent <- liftIO $ newTVarIO prompt
+    pure $ Prompt {promptComponent}
+
 instance Module' Prompt ShellAction where
-  initHook' tc =  do
+  initHook tc =  do
     displayPrompt tc
-  exitHook' _ = pure ()
-  resetHook' tc = do
+  exitHook _ = pure ()
+  resetHook tc = do
     liftIO $ putStr "\r\ESC[0J"
     displayPrompt tc
     pure True
-  preHook' _ _ = pure True
+  preHook _ _ = pure True
   -- unluckily, the following conflicts with a lot of stuff :(
   --postHook' _ _ (KeyModifiers 0, Enter) = displayPrompt tc p $> (True,())
-  postHook' _ _ = pure True
+  postHook _ _ = pure True
 
 data PromptComponent where
   PromptComponent :: (PromptComponent' c) => c -> PromptComponent

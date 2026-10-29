@@ -26,17 +26,20 @@ import System.FilePath.Posix ((</>), takeDirectory)
 import Data.List (sort)
 import FokShell.Module.Parser
 import System.Posix (isDirectory, getFileStatus)
-import FokShell.Module.Preprocessor (connectPreprocessors)
+--import FokShell.Module.Preprocessor (connectPreprocessors)
 import Control.Concurrent.STM
 import Debug.Trace (traceShow)
 import FokShell.Utils (getExecutables, head')
 import FokShell.Module.JobManager
-
+import FokShell.Module.Input (Input)
+import Control.Monad.IO.Class (MonadIO(liftIO))
+import GHC.IO.Device (RawIO(write))
+{-
 data TabContextMode = Disabled | Selection deriving (Eq, Show)
 
 data TabCompletionConfig = TabCompletionConfig
   {
-    sortAlgorithm   :: ShellConfig -> [T.Text] -> [T.Text]
+    sortAlgorithm   :: [T.Text] -> [T.Text]
   , autocomplete    :: AutocompleteConfig
   , maxSuggestions  :: Int
   , shadowText      :: Bool
@@ -106,7 +109,7 @@ displayCompletions current (x:xs) selected displayed = do
                         <> moveCursorRaw DLeft (maxLen+leftLen+rightLen) <> moveCursorRaw Down 1 <> display xs ((\x -> x-1) <$> i)
 
 
-runParser' :: ShellConfig -> T.Text -> IO (Maybe Node)
+runParser' :: T.Text -> ShellAction (Maybe Node)
 runParser' conf t = do
   let parser = fromMaybe def $ head' $ requestModule @ParserModule conf.modules
   let preprocess = connectPreprocessors parser.preprocessors
@@ -115,19 +118,18 @@ runParser' conf t = do
     Just (_, x) -> Just <$> preprocess conf x
 
 
-instance Module' TabCompletion ShellConfig where
-  initHook' tc _ = do
+instance Module' TabCompletion ShellAction where
+  initHook tc = do
     execs <- getExecutables
     atomically . writeTVar tc.executables $ execs
-  exitHook' _ _ = pure ()
-  resetHook' tc p = do
-    p' <- readTVarIO p
-    cleanPrevious p'.input
+  exitHook _ _ = pure ()
+  resetHook tc = do
+    cleanPrevious --p'.input
     atomically $ do
       writeTVar tc.mode Disabled
       writeTVar tc.selected Nothing
     pure True
-  preHook' tc conf e = do
+  preHook tc conf e = do
     conf' <- readTVarIO conf
     curWord <- runParser' conf' conf'.input >>= \case
         Just n -> do
@@ -137,9 +139,11 @@ instance Module' TabCompletion ShellConfig where
     let curWordRaw c = case runParser parser.parser c.input >>= (\n -> getRawDataWrapped n c.input c.cursorLoc) . snd of
           Just (_,x,_) -> last x
           Nothing    -> ""
-        replaceCurrentIO :: T.Text -> TVar ShellConfig -> IO ()
+        replaceCurrentIO :: T.Text -> ShellAction ()
         replaceCurrentIO with conf = do
           c <- readTVarIO conf
+          inputModule <- get @Input
+          input <- liftIO $ readTVarIO inputModule.input
           when (T.length (curWordRaw c) > 0) $ do
             let t = input c
                 i = cursorLoc c
@@ -149,7 +153,7 @@ instance Module' TabCompletion ShellConfig where
 
             T.putStr (bool (moveCursorRaw DLeft (T.length $ curWordRaw conf')) "" (T.null (curWordRaw conf')) <> with <> right <> bool (moveCursorRaw DLeft (T.length right)) "" (T.null right))
             hFlush stdout
-            atomically $ modifyTVar conf (\conf' -> conf' {input=ninput})
+            atomically $ writeTVar inputModule.input ninput--modifyTVar conf (\conf' -> conf' {input=ninput})
     mode <- readTVarIO tc.mode
     selected <- readTVarIO tc.selected
     completions <- readTVarIO tc.completions
@@ -160,7 +164,7 @@ instance Module' TabCompletion ShellConfig where
           [x] -> replaceCurrentIO x conf $> False
           x -> do
             let common = getCommonPrefix x
-            displayCompletions (curWordRaw conf') (tc.tabConfig.sortAlgorithm conf' x) selected tc.tabConfig.maxSuggestions
+            displayCompletions (curWordRaw conf') (tc.tabConfig.sortAlgorithm x) selected tc.tabConfig.maxSuggestions
             replaceCurrentIO common conf
             atomically $ do
               writeTVar tc.mode Selection
@@ -185,7 +189,7 @@ instance Module' TabCompletion ShellConfig where
             let sel = case selected of
                     Just a -> Just $ bool (a+1) 0 (a+1==length completions)
                     Nothing -> Just 0
-            displayCompletions (curWordRaw conf') (tc.tabConfig.sortAlgorithm conf' x) sel tc.tabConfig.maxSuggestions
+            displayCompletions (curWordRaw conf') (tc.tabConfig.sortAlgorithm x) sel tc.tabConfig.maxSuggestions
             atomically $ do
               writeTVar tc.mode Selection
               writeTVar tc.completions x
@@ -196,7 +200,7 @@ instance Module' TabCompletion ShellConfig where
             atomically $ writeTVar tc.selected Nothing
             pure True
           x -> do
-            displayCompletions (curWordRaw conf') (tc.tabConfig.sortAlgorithm conf' x) Nothing tc.tabConfig.maxSuggestions
+            displayCompletions (curWordRaw conf') (tc.tabConfig.sortAlgorithm x) Nothing tc.tabConfig.maxSuggestions
             atomically $ writeTVar tc.selected Nothing
             pure True
           ) . fst
@@ -213,7 +217,7 @@ instance Module' TabCompletion ShellConfig where
         
         ninput =  left <> with <> right-}
 
-  postHook' tc conf _ = do
+  postHook tc conf _ = do
     conf' <- readTVarIO conf
     curWord <- runParser' conf' conf'.input >>= \case
       Just n -> do
@@ -229,9 +233,9 @@ instance Module' TabCompletion ShellConfig where
     selected <- readTVarIO tc.selected
     when (mode == Selection) $ do
       cleanPrevious conf'.input
-      displayCompletions (curWordRaw conf') (tc.tabConfig.sortAlgorithm conf' $ fst m) selected tc.tabConfig.maxSuggestions
+      displayCompletions (curWordRaw conf') (tc.tabConfig.sortAlgorithm $ fst m) selected tc.tabConfig.maxSuggestions
     
-    atomically $ writeTVar tc.completions $ tc.tabConfig.sortAlgorithm conf' $ fst m
+    atomically $ writeTVar tc.completions $ tc.tabConfig.sortAlgorithm $ fst m
 
     pure True
 
@@ -355,4 +359,4 @@ fileListCompletion :: (FilePath -> IO Bool) -> T.Text -> CompletionRule
 fileListCompletion filtr = (`CompRule` fileCompletionRec filtr)
 
 cdCompletion :: CompletionRule
-cdCompletion = CompRule "cd" $ fileCompletion (safeCheck $ (<&> isDirectory) . getFileStatus) $ const (pure [])
+cdCompletion = CompRule "cd" $ fileCompletion (safeCheck $ (<&> isDirectory) . getFileStatus) $ const (pure [])-}
